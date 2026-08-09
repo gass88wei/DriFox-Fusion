@@ -1,0 +1,372 @@
+# -*- coding: utf-8 -*-
+"""
+Git Worktree 检测和管理工具
+
+提供：
+- 检测目录是否为 git 仓库
+- 列出仓库的所有 worktree
+- 判断当前目录是否在 worktree 中
+- 获取 worktree 的详细信息
+"""
+
+import os
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from loguru import logger
+
+# Windows 下隐藏 cmd 窗口
+_CREATION_FLAGS = 0
+if sys.platform == "win32":
+    _CREATION_FLAGS = subprocess.CREATE_NO_WINDOW  # 0x08000000
+
+# 统一编码处理，避免中文乱码崩溃
+_SUBPROCESS_KWARGS = {
+    "capture_output": True,
+    "text": True,
+    "encoding": "utf-8",
+    "errors": "replace",
+    "timeout": 5,
+    "creationflags": _CREATION_FLAGS,
+}
+
+
+def _run_git(args: list, cwd: str) -> subprocess.CompletedProcess:
+    """执行 git 命令（统一处理编码）"""
+    return subprocess.run(
+        ["git"] + args,
+        cwd=cwd,
+        **_SUBPROCESS_KWARGS,
+    )
+
+
+@dataclass
+class WorktreeInfo:
+    """Worktree 信息"""
+
+    path: str  # 绝对路径
+    branch: str  # 分支名（如 refs/heads/main → main）
+    is_main: bool  # 是否是主仓库
+    is_current: bool  # 是否当前所在 worktree
+    is_bare: bool = False  # 是否是 bare 仓库
+    behind_main: int = 0  # 落后主仓库的提交数
+    ahead_main: int = 0  # 超前主仓库的提交数
+
+
+@dataclass
+class GitRepoInfo:
+    """Git 仓库信息"""
+
+    root: str  # git 根目录（含 .git）
+    is_worktree: bool  # 当前目录是否在 worktree 中
+    worktrees: List[WorktreeInfo] = field(default_factory=list)
+    current_branch: str = ""
+
+
+def _finish_worktree(
+    worktrees: List[WorktreeInfo],
+    current: dict[str, str],
+) -> None:
+    """解析 `git worktree list --porcelain` 一个 block，追加到 worktrees 列表"""
+    path = current.get("path", "")
+    if not path:
+        return
+
+    branch_raw = current.get("branch", "")
+    if branch_raw:
+        # refs/heads/<name> → <name>
+        if branch_raw.startswith("refs/heads/"):
+            branch = branch_raw[11:]
+        else:
+            branch = branch_raw
+    else:
+        # 没有 branch 行 = detached HEAD
+        branch = "(detached)"
+
+    is_prunable = "prunable" in current
+    is_main = os.path.isdir(os.path.join(path, ".git"))
+    # git worktree list 第一行是主仓库
+    is_current = len(worktrees) == 0
+
+    worktrees.append(
+        WorktreeInfo(
+            path=path,
+            branch=branch,
+            is_main=is_main,
+            is_current=is_current,
+            is_bare=is_prunable,  # 复用 is_bare 表示可清理状态
+        )
+    )
+
+
+class GitWorktreeDetector:
+    """Git/Worktree 检测器（带内存缓存，避免重复调 git 拖慢 UI）"""
+
+    _git_available: Optional[bool] = None  # 是否安装了 git
+    _detect_cache: dict = {}  # {path: (result, timestamp)}
+    _info_cache: dict = {}  # {path: (GitRepoInfo, timestamp)}
+    _CACHE_TTL = 30.0  # 缓存有效期（秒），避免频繁 git 子进程调用拖慢 UI
+
+    @staticmethod
+    def _is_git_available() -> bool:
+        """检查系统是否安装了 git（仅检测一次，结果缓存）"""
+        if GitWorktreeDetector._git_available is not None:
+            return GitWorktreeDetector._git_available
+        try:
+            subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                timeout=3,
+                creationflags=_CREATION_FLAGS,
+            )
+            GitWorktreeDetector._git_available = True
+        except (FileNotFoundError, OSError):
+            GitWorktreeDetector._git_available = False
+            logger.info("[GitWorktree] git 未安装，跳过 git 检测")
+        return GitWorktreeDetector._git_available
+
+    @staticmethod
+    def _cache_get(cache: dict, key: str):
+        """从缓存获取（检查 TTL）"""
+        import time
+
+        entry = cache.get(key)
+        if entry and time.monotonic() - entry[1] < GitWorktreeDetector._CACHE_TTL:
+            return entry[0]
+        return None
+
+    @staticmethod
+    def _cache_set(cache: dict, key: str, value):
+        """写入缓存"""
+        import time
+
+        cache[key] = (value, time.monotonic())
+
+    @staticmethod
+    def detect_git(path: str) -> Optional[str]:
+        """检测路径是否在 git 仓库中（带缓存）
+
+        注意：只接受目录路径，文件路径直接跳过（避免以文件为 cwd 执行 git 命令报错）
+        """
+        if not path or not os.path.isdir(path):
+            return None
+        if not GitWorktreeDetector._is_git_available():
+            return None
+        cached = GitWorktreeDetector._cache_get(GitWorktreeDetector._detect_cache, path)
+        if cached is not None:
+            return cached
+        try:
+            result = _run_git(["rev-parse", "--show-toplevel"], cwd=path)
+            if result.returncode == 0:
+                val = result.stdout.strip()
+                GitWorktreeDetector._cache_set(GitWorktreeDetector._detect_cache, path, val)
+                return val
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.debug(f"[GitWorktree] detect_git failed for {path}: {e}")
+        GitWorktreeDetector._cache_set(GitWorktreeDetector._detect_cache, path, None)
+        return None
+
+    @staticmethod
+    def is_worktree(path: str) -> bool:
+        """
+        判断路径是否在一个 worktree 中（而非主仓库）
+
+        原理：主仓库的 .git 是文件夹，worktree 的 .git 是文件
+        """
+        if not path:
+            return False
+        git_path = os.path.join(path, ".git")
+        if os.path.isfile(git_path):
+            return True
+        elif os.path.isdir(git_path):
+            try:
+                result = _run_git(["rev-parse", "--git-common-dir"], cwd=path)
+                git_dir = result.stdout.strip()
+                if result.returncode != 0 or not git_dir:
+                    return False
+                result2 = _run_git(["rev-parse", "--git-dir"], cwd=path)
+                local_git_dir = result2.stdout.strip()
+                return local_git_dir != git_dir and "worktrees" in git_dir
+            except Exception:
+                pass
+            return False
+        return False
+
+    @staticmethod
+    def get_current_branch(path: str) -> str:
+        """获取当前分支名"""
+        try:
+            result = _run_git(["branch", "--show-current"], cwd=path)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def list_worktrees(git_root: str) -> List[WorktreeInfo]:
+        """
+        列出 git 仓库的所有 worktree
+
+        使用 --porcelain 格式确保路径含空格时也能正确解析。
+
+        Args:
+            git_root: git 仓库根目录
+
+        Returns:
+            List[WorktreeInfo]: worktree 列表
+        """
+        if not git_root or not os.path.exists(git_root):
+            return []
+
+        try:
+            result = _run_git(["worktree", "list", "--porcelain"], cwd=git_root)
+            if result.returncode != 0:
+                return []
+
+            # --porcelain 格式（每条 worktree 为一个 block，空行分隔）：
+            #   worktree <path>
+            #   HEAD <sha1>
+            #   branch refs/heads/<name>     # 有分支时
+            #   (无 branch 行 = detached HEAD)
+            #   prunable gitdir file ...     # 可选，可清理状态
+            worktrees: List[WorktreeInfo] = []
+            current: dict[str, str] = {}
+
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    # 空行 = 一个 worktree block 结束
+                    if current:
+                        _finish_worktree(worktrees, current)
+                        current = {}
+                    continue
+
+                if line.startswith("worktree "):
+                    current["path"] = line[9:]
+                elif line.startswith("HEAD "):
+                    current["head"] = line[5:]
+                elif line.startswith("branch "):
+                    current["branch"] = line[7:]  # refs/heads/<name>
+                elif line.startswith("prunable "):
+                    current["prunable"] = line[9:]
+                # 其他行（如 detached）忽略
+
+            # 最后一段可能没有尾随空行
+            if current:
+                _finish_worktree(worktrees, current)
+
+            # 计算每个 worktree 相对主仓库的落后/超前提交数。
+            # [P3] 并行执行 rev-list（只读命令、无锁冲突）：大仓库 + N 个 worktree
+            # 时总耗时从串行 N×T 降为 ≈T，避免 list_worktrees 拖慢调用方
+            # （配合 UI 层把本方法移入后台线程，主线程零阻塞）。
+            main_branch = None
+            for wt in worktrees:
+                if wt.is_main:
+                    main_branch = wt.branch
+                    break
+            if main_branch and main_branch != "(detached)":
+                targets = [wt for wt in worktrees if not wt.is_main and wt.branch != "(detached)"]
+                if targets:
+                    import concurrent.futures
+
+                    def _fetch_count(wt: WorktreeInfo):
+                        try:
+                            rev_result = _run_git(
+                                ["rev-list", "--left-right", "--count", f"{main_branch}...{wt.branch}"],
+                                cwd=git_root,
+                            )
+                            if rev_result.returncode == 0:
+                                parts = rev_result.stdout.strip().split("\t")
+                                if len(parts) == 2:
+                                    # left=main_branch, right=worktree_branch
+                                    # behind = main 有而 worktree 没有
+                                    # ahead  = worktree 有而 main 没有
+                                    return wt, int(parts[0]), int(parts[1])
+                        except Exception:
+                            pass
+                        return wt, 0, 0
+
+                    # 并发上限 4：既消除串行累积，又不至于打满子进程
+                    workers = min(4, len(targets))
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                        for wt, behind, ahead in ex.map(_fetch_count, targets):
+                            wt.behind_main = behind
+                            wt.ahead_main = ahead
+
+            return worktrees
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.debug(f"[GitWorktree] list_worktrees failed: {e}")
+            return []
+
+    @staticmethod
+    def get_repo_info(path: str) -> Optional[GitRepoInfo]:
+        """获取路径的完整 git 仓库信息（带 2s 缓存）"""
+        if not path:
+            return None
+        if not GitWorktreeDetector._is_git_available():
+            return None
+
+        cached = GitWorktreeDetector._cache_get(GitWorktreeDetector._info_cache, path)
+        if cached is not None:
+            return cached
+
+        git_root = GitWorktreeDetector.detect_git(path)
+        if not git_root:
+            GitWorktreeDetector._cache_set(GitWorktreeDetector._info_cache, path, None)
+            return None
+
+        is_wt = GitWorktreeDetector.is_worktree(path) or GitWorktreeDetector.is_worktree(git_root)
+        branch = GitWorktreeDetector.get_current_branch(path)
+        worktrees = GitWorktreeDetector.list_worktrees(git_root)
+
+        info = GitRepoInfo(
+            root=git_root,
+            is_worktree=is_wt,
+            worktrees=worktrees,
+            current_branch=branch,
+        )
+        GitWorktreeDetector._cache_set(GitWorktreeDetector._info_cache, path, info)
+        return info
+
+    @staticmethod
+    def get_main_repo_path(worktree_path: str) -> Optional[str]:
+        """从 worktree 路径反查主仓库根目录
+
+        Worktree 的 .git 是一个文件，内容格式为：
+            gitdir: /path/to/main/.git/worktrees/name
+        （Windows: gitdir: D:/path/to/main/.git/worktrees/name）
+        通过向上三层即可得到主仓库根目录。
+        """
+        git_file = os.path.join(worktree_path, ".git")
+        if not os.path.isfile(git_file):
+            return None
+        try:
+            with open(git_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content.startswith("gitdir:"):
+                gitdir_path = content[7:].strip()
+                # .git/worktrees/name → .git/worktrees → .git → repo root
+                return os.path.dirname(os.path.dirname(os.path.dirname(gitdir_path)))
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def get_worktree_by_branch(worktrees: List[WorktreeInfo], branch: str) -> Optional[WorktreeInfo]:
+        """根据分支名查找 worktree"""
+        for wt in worktrees:
+            if wt.branch == branch:
+                return wt
+        return None
+
+    @staticmethod
+    def get_worktree_by_path(worktrees: List[WorktreeInfo], path: str) -> Optional[WorktreeInfo]:
+        """根据路径查找 worktree"""
+        normalized = os.path.normpath(path)
+        for wt in worktrees:
+            if os.path.normpath(wt.path) == normalized:
+                return wt
+        return None

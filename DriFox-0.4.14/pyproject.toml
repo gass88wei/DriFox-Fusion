@@ -1,0 +1,164 @@
+[project]
+name = "drifox"
+version = "0.4.14"
+description = "DriFox - AI Chat Desktop Application"
+readme = "README.md"
+requires-python = ">=3.14"
+license = {text = "MIT"}
+authors = [
+    {name = "98-afk", email = "98-afk@drifox.com"}
+]
+keywords = ["ai", "chat", "llm", "desktop", "pyqt5"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心运行时依赖
+dependencies = [
+    "PyQt5>=5.15.0,<5.15.16",
+    "PyQtWebEngine>=5.15.0,<5.15.7",
+    "PyQt-Fluent-Widgets",
+    "qtpy>=2.0.0",
+    "loguru>=0.7.0",
+    "openai>=1.0.0",
+    "httpx>=0.25.0",
+    "html2text>=2020.1.16",
+    "beautifulsoup4>=4.12.0",
+    "PyYAML>=6.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "psutil",
+    "markdown",
+    "pygments",
+    "requests",
+    "orjson>=3.8.0",
+    "pypinyin",
+    # 桌面自动化 (pynput + mss 组合)
+    "pynput>=1.7.6",
+    "mss>=9.0.1",
+    # 全局热键
+    "keyboard>=0.13.5",
+    # MCP (Model Context Protocol)
+    "mcp>=1.0.0",
+    # 插件热更新
+    "watchfiles>=1.0.0",
+    "aiohttp",
+    # LSP 集成 (Language Server Protocol)
+    "pygls>=2.0.0",
+    "lsprotocol",
+    # CodeGraph 代码智能引擎 (语义级代码探索)
+    "codegraph-py[all]>=1.4.0",
+    # Windows 平台上 pyqt5-qt5 / pyqtwebengine-qt5 仅 5.15.2 提供 win_amd64 wheel
+    "pyqt5-qt5>=5.15.2,<5.15.3; sys_platform == 'win32'",
+    "pyqtwebengine-qt5>=5.15.2,<5.15.3; sys_platform == 'win32'",
+]
+
+# 依赖组（供 uv sync --group / --all-groups 使用）
+# 注意：CI 中 Windows：uv sync --all-groups，macOS：uv sync --group build --group mac-build，Linux：uv sync --group linux-build
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-qt>=4.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pympler>=1.1",
+]
+build = [
+    "pyinstaller>=6.16.0",
+]
+mac-build = [
+    "pyinstaller>=6.16.0",
+    "dmgbuild",
+    "Pillow",
+]
+linux-build = [
+    "pyinstaller>=6.16.0",
+]
+gateway = [
+    "dingtalk-stream>=0.20",
+    # 临时注释：缩小 gateway 范围以便调试 CI（pywin32 实际来自 mcp，非 gateway）
+    # "python-telegram-bot>=20.0",
+    # "discord.py>=2.0",
+    # "slack-sdk>=3.0",
+    # "lark-oapi>=1.0",
+    # "aiohttp>=3.9.0",  # aiohttp 已在 [project] dependencies
+]
+all = [
+    {include-group = "dev"},
+    {include-group = "build"},
+    {include-group = "mac-build"},
+    {include-group = "linux-build"},
+    {include-group = "gateway"},
+]
+
+# ruff 配置
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F"]  # 基本语法、未定义名称
+# 当前代码库遗留问题较多，临时全部 E/F 规则 ignore，后续在专门 PR 中清理
+# (F821 大多为误报：from __future__ import annotations + 条件导入 + 闭包变量)
+ignore = [
+    "E501",  # 行长检查已由 formatter 处理
+    "E402",  # 模块导入不在文件顶部
+    "E701",  # 单行多语句（冒号）
+    "E702",  # 单行多语句（分号）
+    "E731",  # lambda 赋值
+    "E741",  # 模糊变量名（如 l、I、O）
+    "F401",  # 未使用 import
+    "F403",  # import * 后使用未定义本地变量
+    "F405",  # import * 后使用未定义本地变量
+    "F811",  # 重新定义时未使用
+    "F821",  # 未定义名称（误报：条件导入/闭包变量，详见 commit 注释）
+    "F841",  # 未使用变量
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# pytest 配置
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+markers = [
+    "perf: 性能基准测试（测量响应时间）",
+    "stress: 压力测试（连续调用验证稳定性）",
+]
+
+# 构建系统配置
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 打包配置
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+# uv 多平台依赖解析配置
+# 声明项目需要支持的目标平台，确保 uv lock 生成的锁文件兼容所有平台
+[tool.uv]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+# 打包为单文件应用 (Windows)
+[tool.pyinstaller.name]
+onefile = true
+console = false
+name = "Drifox"

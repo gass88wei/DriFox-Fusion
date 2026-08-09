@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+/.drifox/
+/.drifox/app.config
+.workbuddy/
+/docs/
+.superpowers/
+# Build artifacts
+dist/
+# 但保留 CI 构建和 ISS 编译所需文件
+!dist/installer.iss
+!dist/ChineseSimplified.isl
+!dist/drifox.ico
+*.spec
+check_format.py
+debug_*.py
+/test_*.py
+*.json
+!plugins/**/.drifox-plugin/
+!plugins/**/.drifox-plugin/**
+fixed_extractor.py
+various_test.py
+app.config
+.playwright-mcp/ 
+"nul"  
+/.mypy_cache/
+/memory/
+# ── Auto-appended by format_memory_context hook ──
+
+# Python 生态
+*.pyc
+*.pyo
+*.pyd
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# CodeGraph 索引（自动生成，不提交）
+.codegraph/
+
+# 团队工作成果（自动生成，不提交）
+.teams/
+
+# 系统文件
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE/编辑器
+*.swn
+*~
+.project
+.pycpath

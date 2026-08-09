@@ -1,0 +1,196 @@
+from PyQt5.QtCore import QPoint, Qt, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
+from PyQt5.QtWidgets import QWidget
+from app.widgets.simple_hover_tooltip import SimpleHoverTooltip
+
+
+class ConversationNodePreview(QWidget):
+    nodeClicked = pyqtSignal(int)
+
+    # 主题颜色缓存
+    _colors_initialized = False
+
+    @classmethod
+    def _ensure_colors(cls):
+        if not cls._colors_initialized:
+            cls._refresh_colors()
+            cls._colors_initialized = True
+
+    @classmethod
+    def _refresh_colors(cls):
+        from app.utils.design_tokens import Colors
+
+        Colors.refresh()
+        cls._COLOR_NODE_DEFAULT = QColor(Colors.TIMELINE_NODE)
+        cls._COLOR_NODE_HOVER = QColor(Colors.TIMELINE_NODE_HOVER)
+        cls._COLOR_NODE_VISIBLE = QColor(Colors.TIMELINE_NODE_VISIBLE)
+        cls._COLOR_NODE_SELECTED = QColor(Colors.TIMELINE_NODE_SELECTED)
+        cls._COLOR_LINE = QColor(Colors.TIMELINE_LINE)
+        cls._COLOR_LINE_PROGRESS = QColor(Colors.TIMELINE_LINE_PROGRESS)
+
+    def refresh_theme(self):
+        """主题切换时调用，刷新颜色缓存并重绘"""
+        self._refresh_colors()
+        self.update()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ensure_colors()
+        self._nodes = []
+        self._selected_index = -1
+        self._hovered_index = -1
+        self._visible_index = -1
+        self._progress_position = -1.0
+        self._node_radius = 3
+        self._spacing = 16
+        self.setFixedHeight(8)
+        self.setStyleSheet("background-color: transparent;")
+        self.setMouseTracking(True)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if not self._nodes:
+            return
+
+        center_y = self.height() // 2
+        total_width = (len(self._nodes) - 1) * self._spacing
+        start_x = self.width() - total_width - 8
+        end_x = start_x + total_width
+
+        if len(self._nodes) > 1:
+            base_pen = QPen(self._COLOR_LINE)
+            base_pen.setWidth(1)
+            painter.setPen(base_pen)
+            painter.drawLine(start_x, center_y, end_x, center_y)
+
+            if self._progress_position >= 0:
+                clamped_progress = min(max(float(self._progress_position), 0.0), len(self._nodes) - 1)
+                progress_x = start_x + clamped_progress * self._spacing
+
+                active_pen = QPen(self._COLOR_LINE_PROGRESS)
+                active_pen.setWidth(2)
+                painter.setPen(active_pen)
+                painter.drawLine(start_x, center_y, int(progress_x), center_y)
+
+                glow_pen = QPen(self._COLOR_LINE_PROGRESS)
+                glow_pen.setWidth(3)
+                painter.setPen(glow_pen)
+                segment_start = max(start_x, int(progress_x) - 6)
+                segment_end = min(end_x, int(progress_x) + 6)
+                painter.drawLine(segment_start, center_y, segment_end, center_y)
+
+        for i in range(len(self._nodes)):
+            x = start_x + i * self._spacing
+
+            if i == self._selected_index:
+                color = self._COLOR_NODE_SELECTED
+            elif i == self._hovered_index:
+                color = self._COLOR_NODE_HOVER
+            elif i == self._visible_index:
+                color = self._COLOR_NODE_VISIBLE
+            else:
+                color = self._COLOR_NODE_DEFAULT
+
+            painter.setPen(QPen(color))
+            painter.setBrush(QBrush(color))
+            painter.drawEllipse(QPoint(x, center_y), self._node_radius, self._node_radius)
+
+    def mouseMoveEvent(self, event):
+        if not self._nodes:
+            return
+
+        center_y = self.height() // 2
+        total_width = (len(self._nodes) - 1) * self._spacing
+        start_x = self.width() - total_width - 8
+
+        new_hovered = -1
+        for i in range(len(self._nodes)):
+            x = start_x + i * self._spacing
+            if abs(event.x() - x) <= 6 and abs(event.y() - center_y) <= 6:
+                new_hovered = i
+                break
+
+        if new_hovered != self._hovered_index:
+            self._hovered_index = new_hovered
+            if new_hovered >= 0:
+                preview = self._nodes[new_hovered] or ""
+                if len(preview) > 50:
+                    preview = preview[:50] + "..."
+                # 自绘 tooltip 跟随鼠标
+                if not hasattr(self, "_preview_tip") or self._preview_tip is None:
+                    self._preview_tip = SimpleHoverTooltip(transient=True)
+                self._preview_tip.set_text(preview)
+                self._preview_tip.winId()
+                tx = event.globalPos().x() + 12
+                ty = event.globalPos().y() - self._preview_tip.height() - 8
+                screen = self.screen()
+                if screen:
+                    sg = screen.geometry()
+                    tx = max(sg.left() + 2, min(tx, sg.right() - self._preview_tip.width() - 2))
+                    if ty < sg.top():
+                        ty = event.globalPos().y() + 20
+                self._preview_tip.move(tx, ty)
+                self._preview_tip.show()
+            else:
+                self._hide_preview_tip()
+            self.update()
+
+        super().mouseMoveEvent(event)
+
+    def _hide_preview_tip(self):
+        tip = getattr(self, "_preview_tip", None)
+        if tip is not None:
+            tip.hide()
+            tip.deleteLater()
+            self._preview_tip = None
+
+    def leaveEvent(self, event):
+        self._hovered_index = -1
+        self._hide_preview_tip()
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._hovered_index >= 0:
+            self.nodeClicked.emit(self._hovered_index)
+        super().mousePressEvent(event)
+
+    def clear_nodes(self):
+        self._nodes.clear()
+        self._selected_index = -1
+        self._hovered_index = -1
+        self._visible_index = -1
+        self._progress_position = -1.0
+        self.update()
+
+    def add_node(self, index: int, preview_text: str, timestamp: str = None):
+        self._nodes.append(preview_text)
+        self.update()
+
+    def update_nodes(self, node_data: list):
+        self.clear_nodes()
+        for preview, timestamp in node_data:
+            self.add_node(0, preview, timestamp)
+
+    def select_node(self, index: int):
+        if 0 <= index < len(self._nodes):
+            self._selected_index = index
+        else:
+            self._selected_index = -1
+        self.update()
+
+    def set_visible_node(self, index: int):
+        if 0 <= index < len(self._nodes):
+            self._visible_index = index
+        else:
+            self._visible_index = -1
+        self.update()
+
+    def set_progress_position(self, position: float):
+        if not self._nodes:
+            self._progress_position = -1.0
+        else:
+            self._progress_position = min(max(float(position), 0.0), len(self._nodes) - 1)
+        self.update()

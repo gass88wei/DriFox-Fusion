@@ -18,6 +18,25 @@ class MemoryRepository:
     TABLE_NAME = "entry_memories"  # 重命名表
     DB_FILENAME = "sessions.db"
 
+    # ========== Harness 扩展（L1）：4 类条目（prompt/memory/skill/subagent） ==========
+    # 在原有 content/source 基础上扩展 kind/title/scope/version 字段，
+    # 旧数据迁移时自动补默认值（kind='memory'、scope='local'、version=1）。
+    KIND_PROMPT = "prompt"
+    KIND_MEMORY = "memory"
+    KIND_SKILL = "skill"
+    KIND_SUBAGENT = "subagent"
+    VALID_KINDS = (KIND_PROMPT, KIND_MEMORY, KIND_SKILL, KIND_SUBAGENT)
+    SCOPE_LOCAL = "local"
+    SCOPE_GLOBAL = "global"
+    VALID_SCOPES = (SCOPE_LOCAL, SCOPE_GLOBAL)
+    # 迁移时通过 ALTER TABLE 补充的列（SQLite 支持带 DEFAULT 的 ADD COLUMN）
+    _HARNESS_COLUMNS = (
+        ("kind", "TEXT DEFAULT 'memory'"),
+        ("title", "TEXT DEFAULT ''"),
+        ("scope", "TEXT DEFAULT 'local'"),
+        ("version", "INTEGER DEFAULT 1"),
+    )
+
     def __init__(self, db_manager):
         """
         Args:
@@ -35,8 +54,38 @@ class MemoryRepository:
             return False, "数据库未初始化"
         return self._db.execute_sql(sql, params)
 
+    def _column_names(self) -> set:
+        """读取当前表的列名集合（用于增量迁移）
+
+        注意：db_manager 的 row_factory=sqlite3.Row，PRAGMA 返回 Row 对象，
+        不能用 isinstance(col, (list, tuple)) 判断（Row 不是 list/tuple）。
+        """
+        success, cols = self._execute(f"PRAGMA table_info({self.TABLE_NAME})")
+        names = set()
+        if success and cols:
+            for col in cols:
+                try:
+                    names.add(col[1])  # Row / tuple 均支持索引访问
+                except (IndexError, TypeError):
+                    continue
+        return names
+
+    def _ensure_harness_columns(self) -> bool:
+        """增量迁移：为已存在的表补充 harness 扩展列（kind/title/scope/version）"""
+        existing = self._column_names()
+        if not existing:
+            return False
+        ok = True
+        for name, ddl in self._HARNESS_COLUMNS:
+            if name not in existing:
+                success, _ = self._execute(
+                    f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN {name} {ddl}"
+                )
+                ok = ok and success
+        return ok
+
     def _ensure_table(self) -> bool:
-        """确保表存在（迁移旧表或创建新表）"""
+        """确保表存在（迁移旧表或创建新表）+ 增量补充 harness 扩展列"""
         if not self.is_initialized:
             return False
         try:
@@ -51,11 +100,14 @@ class MemoryRepository:
                 success, cols = self._execute("PRAGMA table_info(memories)")
                 has_category = False
                 if success and cols:
-                    # cols 是列表，每个元素是 (cid, name, type, notnull, dflt_value, pk)
+                    # cols 是 Row 对象列表（row_factory=sqlite3.Row），索引访问列名
                     for col in cols:
-                        if isinstance(col, (list, tuple)) and len(col) > 1 and col[1] == 'category':
-                            has_category = True
-                            break
+                        try:
+                            if col[1] == 'category':
+                                has_category = True
+                                break
+                        except (IndexError, TypeError):
+                            continue
 
                 if has_category:
                     # 创建新表并迁移数据
@@ -68,18 +120,22 @@ class MemoryRepository:
                             source TEXT DEFAULT 'manual',
                             created_at TEXT,
                             updated_at TEXT,
-                            last_accessed TEXT
+                            last_accessed TEXT,
+                            kind TEXT DEFAULT 'memory',
+                            title TEXT DEFAULT '',
+                            scope TEXT DEFAULT 'local',
+                            version INTEGER DEFAULT 1
                         )
                     ''')
                     # 迁移数据（忽略 category）
                     self._execute(f'''
-                        INSERT INTO {self.TABLE_NAME} (id, content, enabled, confidence, source, created_at, updated_at, last_accessed)
-                        SELECT memory_id, content, enabled, confidence, source, created_at, updated_at, last_accessed FROM memories
+                        INSERT INTO {self.TABLE_NAME} (id, content, enabled, confidence, source, created_at, updated_at, last_accessed, kind, title, scope, version)
+                        SELECT memory_id, content, enabled, confidence, source, created_at, updated_at, last_accessed, 'memory', '', 'local', 1 FROM memories
                     ''')
                     logger.info("[MemoryRepository] 已迁移旧记忆数据到新表")
                     return True
 
-            # 直接创建新表
+            # 直接创建新表（若已存在则跳过；再补 harness 扩展列）
             success, _ = self._execute(f'''
                 CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
                     id TEXT PRIMARY KEY,
@@ -89,9 +145,15 @@ class MemoryRepository:
                     source TEXT DEFAULT 'manual',
                     created_at TEXT,
                     updated_at TEXT,
-                    last_accessed TEXT
+                    last_accessed TEXT,
+                    kind TEXT DEFAULT 'memory',
+                    title TEXT DEFAULT '',
+                    scope TEXT DEFAULT 'local',
+                    version INTEGER DEFAULT 1
                 )
             ''')
+            # 已有表（老 schema）→ 增量补充 harness 扩展列
+            self._ensure_harness_columns()
             return success
 
         except Exception as e:
@@ -119,7 +181,24 @@ class MemoryRepository:
             "created_at": d.get("created_at", ""),
             "updated_at": d.get("updated_at", ""),
             "last_accessed": d.get("last_accessed", ""),
+            # Harness 扩展字段
+            "kind": d.get("kind", self.KIND_MEMORY),
+            "title": d.get("title", ""),
+            "scope": d.get("scope", self.SCOPE_LOCAL),
+            "version": int(d.get("version", 1) or 1),
         }
+
+    def _normalize_kind(self, kind) -> str:
+        """校验并规范化 kind（非法值回退 memory）"""
+        if kind in self.VALID_KINDS:
+            return kind
+        return self.KIND_MEMORY
+
+    def _normalize_scope(self, scope) -> str:
+        """校验并规范化 scope（非法值回退 local）"""
+        if scope in self.VALID_SCOPES:
+            return scope
+        return self.SCOPE_LOCAL
 
     def save(self, memory: Dict) -> bool:
         """
@@ -146,8 +225,8 @@ class MemoryRepository:
 
         success, _ = self._execute(f'''
             INSERT OR REPLACE INTO {self.TABLE_NAME}
-            (id, content, enabled, confidence, source, created_at, updated_at, last_accessed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, content, enabled, confidence, source, created_at, updated_at, last_accessed, kind, title, scope, version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             memory_id,
             memory.get("content", ""),
@@ -157,6 +236,10 @@ class MemoryRepository:
             memory.get("created_at") or now,
             now,
             now,
+            self._normalize_kind(memory.get("kind", self.KIND_MEMORY)),
+            memory.get("title", ""),
+            self._normalize_scope(memory.get("scope", self.SCOPE_LOCAL)),
+            int(memory.get("version", 1) or 1),
         ))
 
         return success
@@ -198,8 +281,8 @@ class MemoryRepository:
 
                 cursor.execute(f'''
                     INSERT OR REPLACE INTO {self.TABLE_NAME}
-                    (id, content, enabled, confidence, source, created_at, updated_at, last_accessed)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, content, enabled, confidence, source, created_at, updated_at, last_accessed, kind, title, scope, version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     memory_id,
                     memory.get("content", ""),
@@ -209,6 +292,10 @@ class MemoryRepository:
                     memory.get("created_at") or now,
                     now,
                     now,
+                    self._normalize_kind(memory.get("kind", self.KIND_MEMORY)),
+                    memory.get("title", ""),
+                    self._normalize_scope(memory.get("scope", self.SCOPE_LOCAL)),
+                    int(memory.get("version", 1) or 1),
                 ))
 
             # 清理不再存在的记忆（避免全量 DELETE 再 INSERT 导致碎片+WAL 膨胀）
@@ -313,6 +400,63 @@ class MemoryRepository:
             logger.error(f"[MemoryRepository] update 异常: {e}")
             return False
 
+    def update_entry(
+        self,
+        memory_id: str,
+        content: str = None,
+        title: str = None,
+        kind: str = None,
+        scope: str = None,
+        version: int = None,
+    ) -> bool:
+        """
+        Harness 扩展更新：按需更新任意字段（省略的字段保持不变），version 默认 +1
+
+        Args:
+            memory_id: 记忆 ID
+            content: 新内容（None=不变）
+            title: 新标题（None=不变）
+            kind: 新类型（None=不变）
+            scope: 新作用域（None=不变）
+            version: 新版本号（None=自动 +1）
+
+        Returns:
+            bool: 更新是否成功
+        """
+        if not self._ensure_table():
+            return False
+
+        try:
+            sets = ["updated_at = ?"]
+            params: list = [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+            if content is not None:
+                sets.append("content = ?")
+                params.append(content)
+            if title is not None:
+                sets.append("title = ?")
+                params.append(title)
+            if kind is not None:
+                sets.append("kind = ?")
+                params.append(self._normalize_kind(kind))
+            if scope is not None:
+                sets.append("scope = ?")
+                params.append(self._normalize_scope(scope))
+            if version is not None:
+                sets.append("version = ?")
+                params.append(int(version))
+            else:
+                # 默认 version+1（保留原值加 1）
+                sets.append("version = COALESCE(version, 1) + 1")
+            params.append(memory_id)
+            success, _ = self._execute(
+                f'UPDATE {self.TABLE_NAME} SET {", ".join(sets)} WHERE id = ?',
+                tuple(params)
+            )
+            return success
+        except Exception as e:
+            logger.error(f"[MemoryRepository] update_entry 异常: {e}")
+            return False
+
     def delete(self, memory_id: str) -> bool:
         """
         删除指定记忆
@@ -400,13 +544,15 @@ class MemoryRepository:
             logger.error(f"[MemoryRepository] update_last_accessed 异常: {e}")
             return False
 
-    def search(self, query: str = "", limit: int = 9999) -> List[Dict]:
+    def search(self, query: str = "", limit: int = 9999, kind: str = None, scope: str = None) -> List[Dict]:
         """
         搜索记忆
 
         Args:
             query: 搜索关键词
             limit: 最大返回数量
+            kind: 可选，按条目类型过滤（prompt/memory/skill/subagent，None=全部）
+            scope: 可选，按作用域过滤（local/global，None=全部）
 
         Returns:
             List[Dict]: 匹配的记忆列表
@@ -415,17 +561,27 @@ class MemoryRepository:
             return []
 
         try:
+            conditions = []
+            params_list: list = []
             if query:
-                # 使用 LIKE 进行模糊搜索
-                success, rows = self._execute(
-                    f'SELECT * FROM {self.TABLE_NAME} WHERE content LIKE ? ORDER BY confidence DESC LIMIT ?',
-                    (f'%{query}%', limit)
-                )
-            else:
-                success, rows = self._execute(
-                    f'SELECT * FROM {self.TABLE_NAME} ORDER BY confidence DESC LIMIT ?',
-                    (limit,)
-                )
+                conditions.append("content LIKE ?")
+                params_list.append(f"%{query}%")
+            if kind:
+                conditions.append("kind = ?")
+                params_list.append(self._normalize_kind(kind))
+            if scope:
+                conditions.append("scope = ?")
+                params_list.append(self._normalize_scope(scope))
+
+            where = ""
+            if conditions:
+                where = "WHERE " + " AND ".join(conditions)
+            params_list.append(limit)
+
+            success, rows = self._execute(
+                f'SELECT * FROM {self.TABLE_NAME} {where} ORDER BY confidence DESC, updated_at DESC LIMIT ?',
+                tuple(params_list)
+            )
 
             if success and rows:
                 return [self._row_to_memory(row) for row in rows]

@@ -14,25 +14,38 @@ PreUserMessage Hook 函数 — 可选自动路由（默认关闭，L2）
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
 
-_ENABLED: Optional[bool] = None  # None=未初始化（首次访问时从 Settings 读取）
+_ENABLED: Optional[bool] = None  # None=未初始化（首次访问时从文件读取）
 
 _SETTINGS_KEY = "routerAutoRoute"
 
 
-def _load_persisted() -> bool:
-    """从 Settings 读取持久化开关（懒加载，失败回退 False=关）"""
+def _state_file() -> Path:
+    """开关持久化文件（.drifox/app.config/router_auto.json）"""
     try:
-        from app.utils.config import Settings
+        from app.utils.utils import get_app_data_dir
 
-        cfg = Settings.get_instance()
-        if cfg is not None and hasattr(cfg, "get"):
-            return bool(cfg.get(_SETTINGS_KEY, False))
+        d = get_app_data_dir() / "app.config"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "router_auto.json"
+    except Exception:
+        return Path("router_auto.json")
+
+
+def _load_persisted() -> bool:
+    """从持久化文件读取开关（懒加载，失败回退 False=关）"""
+    try:
+        p = _state_file()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return bool(data.get(_SETTINGS_KEY, False))
     except Exception as e:
-        logger.debug(f"[auto_route] Settings 读取失败，按默认关处理: {e}")
+        logger.debug(f"[auto_route] 持久化读取失败，按默认关处理: {e}")
     return False
 
 
@@ -54,13 +67,12 @@ def set_auto_route_enabled(enabled: bool) -> bool:
     global _ENABLED
     _ENABLED = bool(enabled)
     try:
-        from app.utils.config import Settings
-
-        cfg = Settings.get_instance()
-        if cfg is not None and hasattr(cfg, "set") and hasattr(cfg, "save"):
-            cfg.set(_SETTINGS_KEY, _ENABLED)
-            cfg.save()
-            return True
+        p = _state_file()
+        p.write_text(
+            json.dumps({_SETTINGS_KEY: _ENABLED}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return True
     except Exception as e:
         logger.warning(f"[auto_route] 持久化失败（开关仅在本次会话生效）: {e}")
     return False

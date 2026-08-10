@@ -169,65 +169,86 @@ def _default_availability_provider() -> Callable[[Dict[str, str]], str]:
 
 
 def _check_agent(name: str) -> str:
-    """agent 可用性：AgentManager 是否加载了该 agent"""
+    """agent 可用性：AgentManager 是否加载了该 agent（未加载时回退文件存在性）"""
     if not name:
         return "agent 名为空"
     try:
         from app.core.agent import AgentManager
 
         mgr = AgentManager.get_instance() if hasattr(AgentManager, "get_instance") else None
-        if mgr is None:
-            # 兜底：plugins/system/agents/*.md 文件存在性
-            from app.core.plugin_manager import PluginManager
-
-            pm = PluginManager.get_instance() if hasattr(PluginManager, "get_instance") else None
-            agents_dir = None
-            if pm is not None and pm.is_initialized():
-                for plugin in pm.get_enabled_plugins():
-                    d = plugin.path / "agents"
-                    if d.exists():
-                        agents_dir = d
-                        break
-            if agents_dir is None:
-                agents_dir = Path(__file__).resolve().parents[3] / "plugins" / "system" / "agents"
-            md = agents_dir / f"{name}.md"
-            return "" if md.exists() else f"agent {name!r} 不存在"
-        if mgr._agents and name in mgr._agents:
+        loaded = bool(mgr is not None and getattr(mgr, "_agents", None))
+        if loaded and name in mgr._agents:
             return ""
-        return f"agent {name!r} 未加载"
+        # 未加载/空实例（如无 Qt 环境或插件未初始化）→ 文件存在性兜底
+        from app.core.plugin_manager import PluginManager
+
+        pm = PluginManager.get_instance() if hasattr(PluginManager, "get_instance") else None
+        agents_dir = None
+        if pm is not None and pm.is_initialized():
+            for plugin in pm.get_enabled_plugins():
+                d = plugin.path / "agents"
+                if d.exists():
+                    agents_dir = d
+                    break
+        if agents_dir is None:
+            agents_dir = Path(__file__).resolve().parents[3] / "plugins" / "system" / "agents"
+        md = agents_dir / f"{name}.md"
+        if md.exists():
+            return "" if loaded else ""  # 文件存在即可用（未加载时也可路由）
+        return f"agent {name!r} 不存在"
     except Exception as e:
         return f"agent 检测失败: {e}"
 
 
 def _check_skill(name: str) -> str:
-    """skill 可用性：技能目录是否存在"""
+    """skill 可用性：技能目录是否存在（目录为最终依据，get_local_skills 仅辅助）"""
     if not name:
         return "skill 名为空"
+    # 兜底主检：目录存在性（不依赖 PluginManager/Qt 环境）
+    base = Path(__file__).resolve().parents[3] / "plugins" / "system" / "skills"
+    if (base / name).exists():
+        return ""
     try:
         from app.utils.utils import get_local_skills
 
         skills = get_local_skills()
-        known = {s.get("name", "") for s in skills} if skills else set()
-        if known:
-            return "" if name in known else f"skill {name!r} 未安装"
+        if skills:
+            for s in skills:
+                if s.get("name", "") == name:
+                    return ""
     except Exception:
         pass
-    # 兜底：目录存在性
-    base = Path(__file__).resolve().parents[3] / "plugins" / "system" / "skills"
-    return "" if (base / name).exists() else f"skill {name!r} 未安装"
+    # user-custom 插件技能目录
+    try:
+        from app.core.plugin_manager import PluginManager
+
+        pm = PluginManager.get_instance() if hasattr(PluginManager, "get_instance") else None
+        if pm is not None and pm.is_initialized():
+            for plugin in pm.get_enabled_plugins():
+                if (plugin.path / "skills" / name).exists():
+                    return ""
+    except Exception:
+        pass
+    return f"skill {name!r} 未安装"
 
 
 def _check_command(name: str) -> str:
-    """command 可用性：CommandManager 是否已注册"""
+    """command 可用性：CommandManager 是否已注册（未注册时回退命令文件存在性）"""
     if not name:
         return "command 名为空"
     try:
         from app.core.command_manager import CommandManager
 
         mgr = CommandManager.get_instance()
-        return "" if mgr.has_command(name) else f"命令 /{name} 未注册"
+        if mgr.has_command(name):
+            return ""
     except Exception as e:
-        return f"command 检测失败: {e}"
+        logger.debug(f"[Router] CommandManager 查询异常: {e}")
+    # 回退：system commands 目录文件存在性
+    base = Path(__file__).resolve().parents[3] / "plugins" / "system" / "commands"
+    if (base / f"{name}.md").exists():
+        return ""
+    return f"命令 /{name} 未注册"
 
 
 def _check_tool(name: str) -> str:
@@ -403,9 +424,13 @@ class Router:
             fallback=is_fallback,
         )
 
-        # 4. 工具可用性检测（不阻断）
-        if not is_fallback and primary:
-            reason = self._availability(target)
+        # 4. 工具可用性检测（不阻断；none 类型跳过）
+        if not is_fallback and primary and target.get("type") != "none":
+            try:
+                reason = self._availability(target)
+            except Exception as e:
+                logger.warning(f"[Router] availability checker 异常: {e}")
+                reason = f"检测异常: {e}"
             result.available = not reason
             result.available_note = reason
         return result

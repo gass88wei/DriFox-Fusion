@@ -1,0 +1,235 @@
+{
+  "schemaVersion": "1.0",
+  "meta": {
+    "description": "DriFox 任务路由的单一事实源 (Single Source of Truth)。router.py / /route 命令 / PreUserMessage 自动路由 hook 均从此文件读取。修改路由规则请只改此文件，勿改散落在 py / md 里的路由表。",
+    "fallbackId": "R0",
+    "scoring": "每条关键字规则命中后计入候选集；同路由多规则命中则加分；按 priority 数组顺序取『命中分数最高』的为 PRIMARY；分数并列时 priority 靠前者胜出；未命中任何规则时回退 fallbackId。",
+    "targetType": "skill|tool|command|agent|none —— skill=plugins/system/skills 技能目录；tool=内置工具 schema；command=CommandManager 已注册命令；agent=AgentManager 子智能体；none=普通对话"
+  },
+  "routes": {
+    "R1": {
+      "label": "代码探索 / 理解 / 调查",
+      "target": { "type": "agent", "name": "explore" },
+      "keywords": [
+        { "must": "探索|理解代码|代码理解|调查|分析代码|代码库|架构概览|找.*函数|找.*实现|explore|理解这个项目|摸清|梳理代码|读懂|代码地图|codemap|定位.*代码|追踪.*调用|调用链|explain.*code|understand.*code|看看.*代码|代码结构|项目的.*结构|这个项目|项目的.*情况|这是什么|这个文件.*干啥|代码.*干嘛|源码分析|代码意图|结构分析", "note": "代码理解/定位为 explore 主职" },
+        { "must": "索引|index_status|search_code|trace_path|get_architecture", "note": "codebase-memory-mcp 图谱调用属探索域" }
+      ]
+    },
+    "R2": {
+      "label": "编码实现 / 修改 / 构建",
+      "target": { "type": "agent", "name": "build" },
+      "keywords": [
+        { "must": "实现|编写|写一个|写个|修改代码|改代码|开发|编码|构建|build|implement|fix|修复.*bug|加个功能|新增功能|重构.*代码|写成|补全|实现功能|写代码", "exclude": "tdd|测试先行|先写测试|单元测试|test.?driven", "note": "实现/构建主职；tdd 语境下裸 实现/编写 让位给 R13" },
+        { "must": "测试|test", "exclude": "写测试|test.?case|单元测试|tdd|测试先行|跑测试|pytest|用例", "note": "裸测试词让位给 tdd/执行域" }
+      ]
+    },
+    "R3": {
+      "label": "规划 / 拆解 / 方案",
+      "target": { "type": "agent", "name": "plan" },
+      "keywords": [
+        { "must": "规划|拆解|实施方案|执行计划|计划一下|方案设计|先规划|plan|planning|里程碑|todo.?list|实施路径|roadmap|任务拆解", "note": "规划为 plan 主职" }
+      ]
+    },
+    "R4": {
+      "label": "代码审查 / 质量检查",
+      "target": { "type": "agent", "name": "code-reviewer" },
+      "keywords": [
+        { "must": "审查|review|code.?review|代码质量|质量检查|审查代码|码审|reviewer|评审", "exclude": "review.?hours|review.?meeting|文献.*review", "note": "代码审查归 code-reviewer" }
+      ]
+    },
+    "R5": {
+      "label": "团队 / 分工 / 统筹",
+      "target": { "type": "agent", "name": "leader" },
+      "keywords": [
+        { "must": "团队|分工|统筹|分派|派活|队友|成员|协作|leader|team|多智能体|并行.?执行|并发任务", "note": "团队编排为 leader 主职" }
+      ]
+    },
+    "R6": {
+      "label": "任务执行 / 引擎",
+      "target": { "type": "agent", "name": "task-executor" },
+      "keywords": [
+        { "must": "执行任务|task.?executor|统一执行|一次性执行|跑完|执行这个", "note": "task-executor 通用执行" }
+      ]
+    },
+    "R7": {
+      "label": "总结 / 摘要 / 收尾",
+      "target": { "type": "agent", "name": "summary" },
+      "keywords": [
+        { "must": "总结|摘要|汇总|复盘|收尾|成果|结论|summary|summarize|提炼.*结果|汇报", "note": "总结归 summary" }
+      ]
+    },
+    "R8": {
+      "label": "记忆提炼 / Harness",
+      "target": { "type": "command", "name": "refine" },
+      "keywords": [
+        { "must": "提炼|refine|沉淀.*经验|沉淀.*记忆|harness|记忆条目|rollback.*refine|提炼记忆|记忆管理", "note": "Harness 提炼归 /refine" }
+      ]
+    },
+    "R9": {
+      "label": "记忆 / 记住",
+      "target": { "type": "command", "name": "remember" },
+      "keywords": [
+        { "must": "记住|记得|记住这个|remember|记一下|备忘", "note": "快记归 /remember" }
+      ]
+    },
+    "R10": {
+      "label": "待办 / 任务清单",
+      "target": { "type": "command", "name": "todos" },
+      "keywords": [
+        { "must": "待办|todo|清单|任务列表|todos|todowrite|todoread|列出任务", "note": "待办归 /todos" }
+      ]
+    },
+    "R11": {
+      "label": "分支 / 工作树",
+      "target": { "type": "command", "name": "branch" },
+      "keywords": [
+        { "must": "分支|branch|worktree|切换分支|建分支|新分支", "note": "分支操作归 /branch" }
+      ]
+    },
+    "R12": {
+      "label": "新会话 / 新窗口",
+      "target": { "type": "command", "name": "new" },
+      "keywords": [
+        { "must": "新建会话|新会话|开个新窗口|new.?session|新对话|新任务窗口", "note": "会话管理归 /new" }
+      ]
+    },
+    "R13": {
+      "label": "TDD / 测试先行",
+      "target": { "type": "skill", "name": "tdd" },
+      "keywords": [
+        { "must": "tdd|测试先行|先写测试|红绿灯|test.?driven|80%.*覆盖|测试驱动|先红后绿|写测试|写.*测试用例|测试用例", "note": "TDD 方法论归 tdd 技能" }
+      ]
+    },
+    "R14": {
+      "label": "头脑风暴 / 需求探索",
+      "target": { "type": "skill", "name": "brainstorming" },
+      "keywords": [
+        { "must": "头脑风暴|brainstorm|需求探索|想法|创意|发散|方案探讨|聊聊.*想法", "note": "创意发散归 brainstorming" }
+      ]
+    },
+    "R15": {
+      "label": "写计划 / 规格文档",
+      "target": { "type": "skill", "name": "writing-plans" },
+      "keywords": [
+        { "must": "写计划|writing.?plans|规格文档|spec|需求文档|prd|实施方案书|计划书", "note": "计划/规格文档归 writing-plans" }
+      ]
+    },
+    "R16": {
+      "label": "并行子代理 / DAG",
+      "target": { "type": "skill", "name": "dispatching-parallel-agents" },
+      "keywords": [
+        { "must": "并行子代理|dispatching|subagent_para|subagent_dag|分派.*子代理|多个子智能体|dag", "note": "并行编排归 dispatching-parallel-agents" }
+      ]
+    },
+    "R17": {
+      "label": "会话总结 / 压缩续接",
+      "target": { "type": "skill", "name": "session-summary" },
+      "keywords": [
+        { "must": "会话总结|session.?summary|续接|压缩.*继续|compact|compaction|上下文压缩|快照恢复", "note": "会话压缩/续接归 session-summary" }
+      ]
+    },
+    "R18": {
+      "label": "诊断 / 排障",
+      "target": { "type": "skill", "name": "diagnose" },
+      "keywords": [
+        { "must": "诊断|排障|排查|故障|异常.*分析|根因|root.?cause|报错.*分析|troubleshoot|diagnose", "note": "排障归 diagnose" }
+      ]
+    },
+    "R19": {
+      "label": "分诊 / 优先级",
+      "target": { "type": "skill", "name": "triage" },
+      "keywords": [
+        { "must": "分诊|triage|优先级排序|先处理哪个|紧急程度|分类处理", "note": "分诊归 triage" }
+      ]
+    },
+    "R20": {
+      "label": "找技能 / 技能管理",
+      "target": { "type": "skill", "name": "find-skills" },
+      "keywords": [
+        { "must": "找技能|技能库|有.*技能|skill.*list|有没有.*skill|技能管理|装个技能|find.?skills", "note": "技能检索归 find-skills" }
+      ]
+    },
+    "R21": {
+      "label": "创建技能",
+      "target": { "type": "skill", "name": "skill-creator" },
+      "keywords": [
+        { "must": "创建技能|新技能|写个技能|skill.?creator|技能开发|造技能", "note": "技能创作归 skill-creator" }
+      ]
+    },
+    "R22": {
+      "label": "网页抓取",
+      "target": { "type": "tool", "name": "webfetch" },
+      "keywords": [
+        { "must": "抓取网页|抓网页|网页内容|webfetch|读网页|在线文档|网页原文|html|爬取.*页面", "note": "网页内容获取归 webfetch" }
+      ]
+    },
+    "R23": {
+      "label": "网络搜索",
+      "target": { "type": "tool", "name": "websearch" },
+      "keywords": [
+        { "must": "搜索|查一下|搜一搜|websearch|联网查|查资料|搜索引擎|最新.*信息|百度|google", "note": "信息检索归 websearch" }
+      ]
+    },
+    "R24": {
+      "label": "文件读写",
+      "target": { "type": "tool", "name": "write" },
+      "keywords": [
+        { "must": "读文件|写文件|创建文件|修改文件|文件内容|read.*file|write.*file|编辑.*文件", "note": "文件读写主职" }
+      ]
+    },
+    "R25": {
+      "label": "代码搜索",
+      "target": { "type": "tool", "name": "grep" },
+      "keywords": [
+        { "must": "搜索代码|grep|glob|查找.*关键词|搜.*符号|通配符.*查找|正则.*搜索.*代码", "note": "代码检索归 grep/glob" }
+      ]
+    },
+    "R26": {
+      "label": "终端命令",
+      "target": { "type": "tool", "name": "bash" },
+      "keywords": [
+        { "must": "运行命令|终端|命令行|bash|shell|跑一下|执行命令|命令行操作|cmd|powershell|git 操作|git commit|pytest", "note": "终端执行归 bash" }
+      ]
+    },
+    "R27": {
+      "label": "代码诊断 / LSP",
+      "target": { "type": "tool", "name": "get_diagnostics" },
+      "keywords": [
+        { "must": "诊断|diagnostics|语法检查|类型错误|lsp|类型检查|静态检查|pyright|mypy|eslint|tsc", "note": "语言诊断归 get_diagnostics/LSP" }
+      ]
+    },
+    "R28": {
+      "label": "截图 / 桌面自动化",
+      "target": { "type": "tool", "name": "screenshot" },
+      "keywords": [
+        { "must": "截图|screenshot|屏幕|桌面自动化|鼠标|键盘操作|点击.*坐标|拖拽|截屏", "note": "桌面操作归 screenshot/mouse/keyboard" }
+      ]
+    },
+    "R29": {
+      "label": "MCP 服务器管理",
+      "target": { "type": "tool", "name": "mcp_list_servers" },
+      "keywords": [
+        { "must": "mcp|服务器连接|mcp_list_servers|工具服务器|mcp 工具", "note": "MCP 状态归 mcp_list_servers" }
+      ]
+    },
+    "R30": {
+      "label": "团队消息",
+      "target": { "type": "tool", "name": "team_send_message" },
+      "keywords": [
+        { "must": "发消息.*队友|team_send_message|团队消息|通知队友|报告.*leader|进度上报", "note": "团队通信归 team_send_message" }
+      ]
+    },
+    "R0": {
+      "label": "普通对话",
+      "target": { "type": "none", "name": "" },
+      "keywords": [
+        { "must": "你好|hi|hello|在吗|谢谢|你是谁|随便聊聊", "note": "寒暄/闲聊兜底" }
+      ]
+    }
+  },
+  "priority": [
+    "R16", "R13", "R27", "R17", "R1", "R3", "R4", "R2", "R5", "R8",
+    "R18", "R15", "R25", "R26", "R22", "R23", "R24", "R28", "R29", "R30",
+    "R6", "R7", "R9", "R10", "R11", "R12", "R14", "R19", "R20", "R21", "R0"
+  ]
+}

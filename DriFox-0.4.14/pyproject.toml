@@ -55,6 +55,10 @@ dependencies = [
     "lsprotocol",
     # CodeGraph 代码智能引擎 (语义级代码探索)
     "codegraph-py[all]>=1.4.0",
+    # RLM 执行内核 (持久 ipykernel 会话 + dill 状态快照)
+    "ipykernel>=6.29.0",
+    "jupyter-client>=8.6.0",
+    "dill>=0.3.8",
     # Windows 平台上 pyqt5-qt5 / pyqtwebengine-qt5 仅 5.15.2 提供 win_amd64 wheel
     "pyqt5-qt5>=5.15.2,<5.15.3; sys_platform == 'win32'",
     "pyqtwebengine-qt5>=5.15.2,<5.15.3; sys_platform == 'win32'",
@@ -135,6 +139,7 @@ asyncio_mode = "auto"
 markers = [
     "perf: 性能基准测试（测量响应时间）",
     "stress: 压力测试（连续调用验证稳定性）",
+    "kernel: RLM 执行内核测试（需要 ipykernel + jupyter-client + dill）",
 ]
 
 # 构建系统配置

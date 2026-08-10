@@ -19,6 +19,7 @@ DANGEROUS_TOOLS = frozenset(
         "stage_files",  # 文件标记
         "subagent_para",
         "subagent_dag",  # 子智能体（可执行任意代码/修改文件）
+        "make_python",  # RLM 内核（执行任意 Python 代码）
     }
 )
 

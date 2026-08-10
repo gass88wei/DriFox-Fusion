@@ -24,6 +24,7 @@ from app.tools.automation import AutomationTools
 from app.tools.codegraph_tools import CodeGraphTools
 from app.tools.diagnostics_tools import DiagnosticsTools
 from app.tools.file_tools import FileTools
+from app.tools.kernel_tools import KernelTools
 from app.tools.mcp_tools import MCPClientManager
 from app.tools.result import ToolResult
 from app.tools.task_tools import TaskTools
@@ -112,6 +113,10 @@ class BuiltinTools(QObject):
         # 团队协作工具
         self._tools["team"] = TeamTools(self)
 
+        # RLM 执行内核工具（持久 ipykernel，跨轮状态）
+        self._tools["kernel"] = KernelTools(self)
+        self._kernel_tools = self._tools["kernel"]
+
         # Expose properties for backward compatibility
         self._file_tools = file_tools
         self._web_tools = self._tools["web"]
@@ -135,6 +140,10 @@ class BuiltinTools(QObject):
     @property
     def task_tools(self):
         return self._task_tools
+
+    @property
+    def kernel_tools(self):
+        return self._kernel_tools
 
     @property
     def diagnostics_tools(self):
@@ -1122,6 +1131,27 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_python",
+            "description": "在持久 Python 内核中执行代码，变量/函数/import 跨轮保留（RLM 工作层）。首次调用自动启动内核；内核状态跨对话轮次存活；可用 kernel_restart 清空。适合：计算/解析/数据转换/验证脚本。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "要执行的 Python 代码",
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "超时毫秒（可选，默认不超时；长任务建议显式设置）",
+                    },
+                },
+                "required": ["code"],
             },
         },
     },

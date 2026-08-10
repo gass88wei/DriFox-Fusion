@@ -1,4 +1,4 @@
---- 
-description: ¶ÔÈÎÎñÃèÊö×öÂ·ÓÉÆÀ·Ö£¬Êä³ö PRIMARY Â·¾¶£¨agent/¼¼ÄÜ/¹¤¾ß£©+ ÒÀ¾Ý 
-type: function 
+---
+description: å¯¹ä»»åŠ¡æè¿°åšè·¯ç”±è¯„åˆ†ï¼Œè¾“å‡º PRIMARY è·¯å¾„ï¼ˆagent/æŠ€èƒ½/å·¥å…·ï¼‰+ ä¾æ®
+type: function
 ---

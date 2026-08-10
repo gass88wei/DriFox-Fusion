@@ -11,7 +11,7 @@
       "label": "代码探索 / 理解 / 调查",
       "target": { "type": "agent", "name": "explore" },
       "keywords": [
-        { "must": "探索|理解代码|代码理解|调查|分析代码|代码库|架构概览|找.*函数|找.*实现|explore|理解这个项目|摸清|梳理代码|读懂|代码地图|codemap|定位.*代码|追踪.*调用|调用链|explain.*code|understand.*code|看看.*代码|代码结构|项目的.*结构|这个项目|项目的.*情况|这是什么|这个文件.*干啥|代码.*干嘛|源码分析|代码意图|结构分析", "note": "代码理解/定位为 explore 主职" },
+        { "must": "探索|理解代码|代码理解|调查|分析代码|代码库|架构概览|找.*函数|找.*实现|explore|理解这个项目|摸清|梳理代码|读懂|代码地图|codemap|定位.*代码|追踪.*调用|调用链|explain.*code|understand.*code|看看.*代码|代码结构|项目的.*结构|这个项目|项目的.*情况|这是什么|这个文件.*干啥|代码.*干嘛|源码分析|代码意图|结构分析|理解.*代码|这段代码|代码在做什么|代码什么意思", "note": "代码理解/定位为 explore 主职" },
         { "must": "索引|index_status|search_code|trace_path|get_architecture", "note": "codebase-memory-mcp 图谱调用属探索域" }
       ]
     },
@@ -19,15 +19,15 @@
       "label": "编码实现 / 修改 / 构建",
       "target": { "type": "agent", "name": "build" },
       "keywords": [
-        { "must": "实现|编写|写一个|写个|修改代码|改代码|开发|编码|构建|build|implement|fix|修复.*bug|加个功能|新增功能|重构.*代码|写成|补全|实现功能|写代码", "exclude": "tdd|测试先行|先写测试|单元测试|test.?driven", "note": "实现/构建主职；tdd 语境下裸 实现/编写 让位给 R13" },
-        { "must": "测试|test", "exclude": "写测试|test.?case|单元测试|tdd|测试先行|跑测试|pytest|用例", "note": "裸测试词让位给 tdd/执行域" }
+        { "must": "实现|编写|写一个|写个|修改代码|改代码|开发|编码|构建|build|implement|fix|修复.*bug|加个功能|新增功能|重构.*代码|写成|补全|实现功能|写代码|加.*功能|加.*按钮", "exclude": "tdd|测试先行|先写测试|单元测试|test.?driven|测试驱动|实施计划|计划文档|计划书|规格文档|需求文档|配置文件|新技能|写个技能|技能开发|skill.?creator|写.*计划", "note": "实现/构建主职；tdd/计划/技能/文件 语境让位" },
+        { "must": "测试|test", "exclude": "写测试|test.?case|单元测试|tdd|测试先行|跑测试|pytest|用例|终端|跑一下", "note": "裸测试词让位给 tdd/执行域" }
       ]
     },
     "R3": {
       "label": "规划 / 拆解 / 方案",
       "target": { "type": "agent", "name": "plan" },
       "keywords": [
-        { "must": "规划|拆解|实施方案|执行计划|计划一下|方案设计|先规划|plan|planning|里程碑|todo.?list|实施路径|roadmap|任务拆解", "note": "规划为 plan 主职" }
+        { "must": "规划|拆解|实施方案|执行计划|计划一下|方案设计|先规划|\\bplan\\b|planning|里程碑|todo.?list|实施路径|roadmap|任务拆解", "note": "规划为 plan 主职" }
       ]
     },
     "R4": {
@@ -41,7 +41,7 @@
       "label": "团队 / 分工 / 统筹",
       "target": { "type": "agent", "name": "leader" },
       "keywords": [
-        { "must": "团队|分工|统筹|分派|派活|队友|成员|协作|leader|team|多智能体|并行.?执行|并发任务", "note": "团队编排为 leader 主职" }
+        { "must": "团队|分工|统筹|分派|派活|队友|成员|协作|leader|\\bteam\\b|多智能体|并行.?执行|并发任务", "note": "团队编排为 leader 主职" }
       ]
     },
     "R6": {
@@ -55,7 +55,7 @@
       "label": "总结 / 摘要 / 收尾",
       "target": { "type": "agent", "name": "summary" },
       "keywords": [
-        { "must": "总结|摘要|汇总|复盘|收尾|成果|结论|summary|summarize|提炼.*结果|汇报", "note": "总结归 summary" }
+        { "must": "总结|会话摘要|内容摘要|对话摘要|写.*摘要|生成.*摘要|汇总|复盘|收尾|成果|结论|summary|summarize|提炼.*结果|汇报", "note": "总结归 summary" }
       ]
     },
     "R8": {
@@ -111,7 +111,7 @@
       "label": "写计划 / 规格文档",
       "target": { "type": "skill", "name": "writing-plans" },
       "keywords": [
-        { "must": "写计划|writing.?plans|规格文档|spec|需求文档|prd|实施方案书|计划书", "note": "计划/规格文档归 writing-plans" }
+        { "must": "写计划|writing.?plans|规格文档|spec|需求文档|prd|实施方案书|计划书|计划文档|实施计划|写.*计划", "note": "计划/规格文档归 writing-plans" }
       ]
     },
     "R16": {
@@ -146,21 +146,21 @@
       "label": "找技能 / 技能管理",
       "target": { "type": "skill", "name": "find-skills" },
       "keywords": [
-        { "must": "找技能|技能库|有.*技能|skill.*list|有没有.*skill|技能管理|装个技能|find.?skills", "note": "技能检索归 find-skills" }
+        { "must": "找技能|技能库|有.*技能|skill.*list|有没有.*skill|有没有.*技能|技能管理|装个技能|find.?skills|找.*技能|用什么技能|哪个技能", "note": "技能检索归 find-skills" }
       ]
     },
     "R21": {
       "label": "创建技能",
       "target": { "type": "skill", "name": "skill-creator" },
       "keywords": [
-        { "must": "创建技能|新技能|写个技能|skill.?creator|技能开发|造技能", "note": "技能创作归 skill-creator" }
+        { "must": "创建技能|新技能|写个技能|skill.?creator|技能开发|造技能|创建.*技能", "note": "技能创作归 skill-creator" }
       ]
     },
     "R22": {
       "label": "网页抓取",
       "target": { "type": "tool", "name": "webfetch" },
       "keywords": [
-        { "must": "抓取网页|抓网页|网页内容|webfetch|读网页|在线文档|网页原文|html|爬取.*页面", "note": "网页内容获取归 webfetch" }
+        { "must": "抓取网页|抓网页|抓.*网页|网页内容|webfetch|读网页|在线文档|网页原文|html|爬取.*页面", "note": "网页内容获取归 webfetch" }
       ]
     },
     "R23": {
@@ -174,7 +174,7 @@
       "label": "文件读写",
       "target": { "type": "tool", "name": "write" },
       "keywords": [
-        { "must": "读文件|写文件|创建文件|修改文件|文件内容|read.*file|write.*file|编辑.*文件", "note": "文件读写主职" }
+        { "must": "读文件|写文件|创建文件|修改文件|文件内容|read.*file|write.*file|编辑.*文件|读一下|读.*文件|写.*文件|打开文件", "note": "文件读写主职" }
       ]
     },
     "R25": {
@@ -188,21 +188,21 @@
       "label": "终端命令",
       "target": { "type": "tool", "name": "bash" },
       "keywords": [
-        { "must": "运行命令|终端|命令行|bash|shell|跑一下|执行命令|命令行操作|cmd|powershell|git 操作|git commit|pytest", "note": "终端执行归 bash" }
+        { "must": "运行命令|终端|命令行|bash|shell|跑一下|执行命令|命令行操作|cmd|powershell|git 操作|git commit|pytest", "exclude": "task.?executor", "note": "终端执行归 bash；task-executor 语境让位 R6" }
       ]
     },
     "R27": {
       "label": "代码诊断 / LSP",
       "target": { "type": "tool", "name": "get_diagnostics" },
       "keywords": [
-        { "must": "诊断|diagnostics|语法检查|类型错误|lsp|类型检查|静态检查|pyright|mypy|eslint|tsc", "note": "语言诊断归 get_diagnostics/LSP" }
+        { "must": "代码.*诊断|diagnostics|语法检查|语法错误|语法问题|类型错误|lsp|类型检查|静态检查|pyright|mypy|eslint|tsc", "note": "语言诊断归 get_diagnostics/LSP" }
       ]
     },
     "R28": {
       "label": "截图 / 桌面自动化",
       "target": { "type": "tool", "name": "screenshot" },
       "keywords": [
-        { "must": "截图|screenshot|屏幕|桌面自动化|鼠标|键盘操作|点击.*坐标|拖拽|截屏", "note": "桌面操作归 screenshot/mouse/keyboard" }
+        { "must": "截图|screenshot|屏幕|桌面自动化|鼠标|键盘操作|点击.*坐标|拖拽|截屏|截.*屏", "note": "桌面操作归 screenshot/mouse/keyboard" }
       ]
     },
     "R29": {
@@ -216,7 +216,8 @@
       "label": "团队消息",
       "target": { "type": "tool", "name": "team_send_message" },
       "keywords": [
-        { "must": "发消息.*队友|team_send_message|团队消息|通知队友|报告.*leader|进度上报", "note": "团队通信归 team_send_message" }
+        { "must": "发消息.*队友|team_send_message|团队消息|通知队友|报告.*leader|给.*队友.*发", "note": "团队通信归 team_send_message" },
+        { "must": "进度上报|进度消息|汇报.*进度", "note": "进度上报加分项" }
       ]
     },
     "R0": {

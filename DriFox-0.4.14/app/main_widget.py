@@ -4174,7 +4174,7 @@ class OpenAIChatToolWindow(ToolWindow):
         if FunctionCommandHandlers.has(name):
             return True
         # 硬编码内置命令
-        if name in ("new", "new-window", "branch", "remember"):
+        if name in ("new", "new-window", "branch", "remember", "refine"):
             return True
         return False
 
@@ -4245,6 +4245,9 @@ class OpenAIChatToolWindow(ToolWindow):
                 return True
             elif command_name == "remember":
                 self._remember_to_memory(args)
+                return True
+            elif command_name == "refine":
+                self._handle_refine_command(args)
                 return True
             else:
                 # 无 Python 处理器注册 → 降级到 prompt 注入（缺处理器语义）
@@ -6340,6 +6343,118 @@ class OpenAIChatToolWindow(ToolWindow):
             InfoBar.error(
                 "记忆失败",
                 "无法保存到长期记忆",
+                parent=TabManagerWindow.get_instance() or self.window(),
+                position=InfoBarPosition.BOTTOM,
+            )
+
+    def _handle_refine_command(self, args: str):
+        """/refine 命令：提炼对话为 Harness 条目（prompt/memory/skill/subagent）
+
+        支持参数：
+        - 自由文本：提炼指令（默认按启发式生成 memory 条目）
+        - --global：条目写入全局作用域（默认 local）
+        - --rollback <refine_id>：回滚一次提炼（快照恢复 before 状态）
+        - --history：列出最近提炼记录
+
+        Args:
+            args: 命令后的参数字符串
+        """
+        from app.core.harness.refine import RefineEngine, RefineValidationError
+
+        args = (args or "").strip()
+
+        # --rollback <id>
+        rb_match = re.search(r"--rollback\s+(\S+)", args)
+        if rb_match:
+            refine_id = rb_match.group(1)
+            try:
+                from app.core.harness.refine import build_engine
+
+                engine = build_engine()
+                result = engine.rollback(refine_id)
+                restored = len(result.get("restored", []))
+                removed = len(result.get("removed", []))
+                InfoBar.success(
+                    "回滚完成",
+                    f"{refine_id}: 恢复 {restored} 条，删除新增 {removed} 条",
+                    parent=TabManagerWindow.get_instance() or self.window(),
+                    position=InfoBarPosition.BOTTOM,
+                )
+            except (RefineValidationError, RuntimeError) as e:
+                InfoBar.error(
+                    "回滚失败",
+                    str(e),
+                    parent=TabManagerWindow.get_instance() or self.window(),
+                    position=InfoBarPosition.BOTTOM,
+                )
+            return
+
+        # --history
+        if re.search(r"--history\b", args):
+            try:
+                from app.core.harness.refine import build_engine
+
+                engine = build_engine()
+                records = engine.list_history(limit=10)
+                if not records:
+                    InfoBar.info(
+                        "暂无提炼记录",
+                        "还没有执行过 /refine",
+                        parent=TabManagerWindow.get_instance() or self.window(),
+                        position=InfoBarPosition.BOTTOM,
+                    )
+                    return
+                lines = [f"{r['refine_id']} | {r['scope']} | {r['created_at']} | {r['change_count']} 条" for r in records]
+                InfoBar.info(
+                    "最近提炼记录",
+                    "\n".join(lines[:6]),
+                    parent=TabManagerWindow.get_instance() or self.window(),
+                    duration=5000,
+                    position=InfoBarPosition.BOTTOM,
+                )
+            except (RefineValidationError, RuntimeError) as e:
+                InfoBar.error(
+                    "查询失败",
+                    str(e),
+                    parent=TabManagerWindow.get_instance() or self.window(),
+                    position=InfoBarPosition.BOTTOM,
+                )
+            return
+
+        # 常规提炼：--global 标记 + 指令文本（剥离 flag）
+        scope = "global" if re.search(r"(?:^|\s)--global(?=\s|$)", args) else "local"
+        instructions = re.sub(r"(?:^|\s)--global(?=\s|$)", "", args).strip()
+
+        # 构造轨迹：取当前会话最近 20 条消息（role/content）
+        trajectory: list = []
+        try:
+            session = self.session_manager.get_current_session() if self.session_manager else None
+            if session and getattr(session, "messages", None):
+                for msg in list(session.messages)[-20:]:
+                    role = msg.get("role", "") if isinstance(msg, dict) else ""
+                    content = msg.get("content", "") if isinstance(msg, dict) else ""
+                    if role and content:
+                        trajectory.append({"role": role, "content": content})
+        except Exception:
+            trajectory = []
+
+        try:
+            from app.core.harness.refine import build_engine
+
+            engine = build_engine()
+            result = engine.refine(trajectory, instructions, scope=scope)
+            rid = result["refine_id"]
+            summary = f"新增 {len(result['created'])} / 更新 {len(result['updated'])} / 删除 {len(result['deleted'])} (scope={scope})"
+            InfoBar.success(
+                f"提炼完成 {rid[:20]}",
+                summary,
+                parent=TabManagerWindow.get_instance() or self.window(),
+                position=InfoBarPosition.BOTTOM,
+            )
+        except (RefineValidationError, RuntimeError) as e:
+            InfoBar.error(
+                "提炼失败",
+                str(e),
                 parent=TabManagerWindow.get_instance() or self.window(),
                 position=InfoBarPosition.BOTTOM,
             )

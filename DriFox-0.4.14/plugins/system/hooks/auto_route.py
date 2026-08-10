@@ -26,11 +26,15 @@ _SETTINGS_KEY = "routerAutoRoute"
 
 
 def _state_file() -> Path:
-    """开关持久化文件（.drifox/app.config/router_auto.json）"""
+    """开关持久化文件（.drifox/cache/router_auto.json）
+
+    注意：`.drifox/app.config` 是应用配置文件（同名文件而非目录），
+    不能在其下 mkdir；状态类小文件统一放 cache 目录。
+    """
     try:
         from app.utils.utils import get_app_data_dir
 
-        d = get_app_data_dir() / "app.config"
+        d = get_app_data_dir() / "cache"
         d.mkdir(parents=True, exist_ok=True)
         return d / "router_auto.json"
     except Exception:
@@ -115,6 +119,15 @@ def hook(event: str, context: dict) -> str:
 
 
 def reset_for_tests():
-    """测试用：重置内存开关为未初始化"""
+    """测试用：完全重置（内存未初始化 + 删除持久化文件）
+
+    仅删除本模块自己的状态文件，恢复"默认关"出厂态。
+    """
     global _ENABLED
     _ENABLED = None
+    try:
+        p = _state_file()
+        if p.exists():
+            p.unlink()
+    except Exception as e:
+        logger.debug(f"[auto_route] 测试重置清理状态文件失败（忽略）: {e}")

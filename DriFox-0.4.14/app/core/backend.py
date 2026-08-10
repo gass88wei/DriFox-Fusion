@@ -2421,6 +2421,21 @@ class ChatBackend(QObject):
         except Exception:
             pass
 
+        # Harness 条目（L1：prompt/skill/subagent 结构化注入；memory 类已由条目记忆段覆盖，
+        # 避免同表双轨冗余）
+        try:
+            from app.core.harness.entries import HarnessEntries
+
+            harness = HarnessEntries(self._memory_manager.entry_memories)
+            harness_rows = [
+                e for e in harness.list(limit=100)
+                if e.get("kind") != "memory"
+            ]
+            if harness_rows:
+                ctx["harness_entries"] = harness_rows
+        except Exception:
+            pass
+
         # 关键文档（含路径显示）
         try:
             wd_path = self._tool_executor.get_workdir() if self._tool_executor else ""

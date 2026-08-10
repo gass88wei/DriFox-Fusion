@@ -680,19 +680,22 @@ def _build_git_status_block(cwd: str) -> list[str] | None:
 
 
 def hook(event: str, context: dict) -> str:
-    """注入条目记忆 + 关键文档（长期记忆）
+    """注入条目记忆 + 关键文档 + Harness 条目（长期记忆）
 
     Args:
         event: 事件名称（PreUserMessage）
         context: 由 backend 预取的上下文，含：
             - entry_memories: list[str] 条目记忆列表
             - key_documents: list[dict] 关键文档列表
+            - harness_entries: list[dict] (L1) 结构化条目（prompt/skill/subagent），
+              memory 类已由 entry_memories 覆盖，不在此重复
 
     Returns:
         格式化的长期记忆字符串
     """
     entry_memories = context.get("entry_memories", [])
     key_documents = context.get("key_documents", [])
+    harness_entries = context.get("harness_entries", [])
 
     mem_lines = ["### 条目记忆"]
     if entry_memories:
@@ -701,6 +704,15 @@ def hook(event: str, context: dict) -> str:
     else:
         mem_lines.append("- 暂无条目记忆")
     mem_lines.append("")
+
+    # L1 Harness 结构化条目（prompt/skill/subagent），复用 harness formatter
+    if harness_entries:
+        from app.core.harness.formatter import format_entries_for_prompt
+
+        harness_text = format_entries_for_prompt(harness_entries)
+        if harness_text:
+            mem_lines.append(harness_text)
+            mem_lines.append("")
 
     mem_lines.append("### 关键文档")
     if key_documents:
@@ -719,7 +731,7 @@ def hook(event: str, context: dict) -> str:
     else:
         mem_lines.append("- 暂无关键文档")
 
-    if not entry_memories and not key_documents:
+    if not entry_memories and not key_documents and not harness_entries:
         return ""
     return "\n".join(mem_lines)
 

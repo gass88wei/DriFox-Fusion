@@ -4174,7 +4174,7 @@ class OpenAIChatToolWindow(ToolWindow):
         if FunctionCommandHandlers.has(name):
             return True
         # 硬编码内置命令
-        if name in ("new", "new-window", "branch", "remember", "refine", "route", "router"):
+        if name in ("new", "new-window", "branch", "remember", "refine", "route", "router", "kernel-attach"):
             return True
         return False
 
@@ -4254,6 +4254,9 @@ class OpenAIChatToolWindow(ToolWindow):
                 return True
             elif command_name == "router":
                 self._handle_router_command(args)
+                return True
+            elif command_name == "kernel-attach":
+                self._handle_kernel_attach_command(args)
                 return True
             else:
                 # 无 Python 处理器注册 → 降级到 prompt 注入（缺处理器语义）
@@ -6598,6 +6601,134 @@ class OpenAIChatToolWindow(ToolWindow):
         InfoBar.info("路由管理", "/router --list 规则列表\n/router --stats 统计\n/router --auto on|off 自动路由\n/router --check <任务> 路由评分",
                      parent=TabManagerWindow.get_instance() or self.window(),
                      duration=6000, position=InfoBarPosition.BOTTOM)
+
+    def _handle_kernel_attach_command(self, args: str):
+        """/kernel-attach 命令：UI attach RLM 常驻服务（L4 后台保活）
+
+        用法:
+          /kernel-attach                查看服务状态 + 最近任务（默认端口 8765）
+          /kernel-attach <任务ID>        attach 任务事件流（SSE 回放+实时，事件记入日志）
+          /kernel-attach replay <任务ID> 回放任务历史事件（快照+事件列表）
+          /kernel-attach detach         断开连接（服务端任务继续执行）
+          /kernel-attach --port <N>     指定服务端口
+
+        关闭窗口仅 detach：服务进程/内核/任务不受影响。
+        """
+        from loguru import logger as _logger
+
+        args = (args or "").strip()
+
+        # 解析 --port
+        port = 8765
+        port_match = re.search(r"--port\s+(\d+)", args)
+        if port_match:
+            port = int(port_match.group(1))
+        cmd_args = re.sub(r"--port\s+\d+", "", args).strip()
+
+        try:
+            from app.gateway.local_service.attach_client import KernelAttachClient
+        except Exception as e:
+            InfoBar.error("内核服务", f"attach 客户端不可用: {e}",
+                          parent=TabManagerWindow.get_instance() or self.window(),
+                          position=InfoBarPosition.BOTTOM)
+            return
+
+        def _info(title, text, duration=6000):
+            InfoBar.info(title, text, parent=TabManagerWindow.get_instance() or self.window(),
+                         duration=duration, position=InfoBarPosition.BOTTOM)
+
+        def _error(title, text):
+            InfoBar.error(title, text, parent=TabManagerWindow.get_instance() or self.window(),
+                          position=InfoBarPosition.BOTTOM)
+
+        # 无参数 → 服务状态 + 最近任务
+        if not cmd_args:
+            try:
+                client = KernelAttachClient(port=port)
+                st = client.status()
+                tasks = client.list_tasks()[:5]
+                kernel_state = (st.get("kernel") or {}).get("running")
+                lines = [
+                    f"内核: {'运行中' if kernel_state else '未启动'}",
+                    f"任务总数: {st.get('tasks_total', 0)} ({st.get('tasks_by_status', {})})",
+                    f"快照: {st.get('snapshot') or '无'}",
+                ]
+                if tasks:
+                    lines.append("--- 最近任务 ---")
+                    for t in tasks:
+                        lines.append(f"  {t['id'][:14]} [{t['status']}] {t['created_at']}")
+                _info("RLM 常驻服务", "\n".join(lines), duration=8000)
+            except Exception as e:
+                _error("内核服务", str(e))
+            return
+
+        # detach
+        if cmd_args == "detach":
+            client = getattr(self, "_kernel_attach_client", None)
+            if client is not None and client.attached:
+                client.detach()
+                self._kernel_attach_client = None
+                _info("内核服务", "已 detach（服务端内核/任务继续执行）")
+            else:
+                _info("内核服务", "当前未 attach")
+            return
+
+        # replay：回放任务历史事件
+        if cmd_args.startswith("replay"):
+            rest = cmd_args[len("replay"):].strip()
+            if not rest:
+                _info("内核服务", "/kernel-attach replay <任务ID> 回放事件")
+                return
+            try:
+                client = KernelAttachClient(port=port)
+                detail = client.task_detail(rest)
+                events = detail.get("events") or []
+                lines = [f"状态: {detail.get('status')}"]
+                for ev in events[-10:]:
+                    lines.append(f"  [{ev.get('ts', '')}] {ev.get('type')}")
+                _info(f"任务 {rest[:14]}", "\n".join(lines), duration=10000)
+            except Exception as e:
+                _error("内核服务", str(e))
+            return
+
+        # 默认动作：attach 任务事件流
+        tid = cmd_args
+        client = KernelAttachClient(port=port)
+        try:
+            # 先确认任务存在（顺便校验服务可达）
+            client.task_detail(tid)
+        except Exception as e:
+            _error("内核服务", str(e))
+            return
+
+        # 停掉旧的 attach（同一窗口只保留一个）
+        old = getattr(self, "_kernel_attach_client", None)
+        if old is not None and old.attached:
+            old.detach()
+
+        def _on_event(ev):
+            _logger.info(f"[KernelAttach] {tid} {ev.get('type')}: {str(ev.get('data'))[:200]}")
+
+        def _on_error(msg):
+            _logger.warning(f"[KernelAttach] {msg}")
+
+        self._kernel_attach_client = client
+        try:
+            client.attach(tid, on_event=_on_event, on_error=_on_error)
+            _info("内核服务", f"已 attach 任务 {tid[:14]}（事件流实时记入日志；/kernel-attach detach 断开）")
+        except Exception as e:
+            self._kernel_attach_client = None
+            _error("内核服务", str(e))
+
+    def _disconnect_kernel_attach(self):
+        """窗口关闭：仅 detach，不杀服务（服务进程/内核/任务继续）"""
+        client = getattr(self, "_kernel_attach_client", None)
+        if client is not None and client.attached:
+            try:
+                client.detach()
+            except Exception:
+                pass
+        self._kernel_attach_client = None
 
     # ========== 命令卡片处理 ==========
 
@@ -18975,6 +19106,9 @@ class OpenAIChatToolWindow(ToolWindow):
         return None
 
     def closeEvent(self, event):
+        # 窗口关闭仅 detach RLM 常驻服务 attach（不杀服务进程/内核/任务）
+        self._disconnect_kernel_attach()
+
         # 🔧 F2: 主动断开 destroyed 清理连接 + 立即清理快捷键，避免窗口 C++ 对象
         # 销毁触发 destroyed 时 lambda 访问已删除的 self 抛 RuntimeError
         # （wrapped C/C++ object has been deleted）。

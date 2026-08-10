@@ -15,12 +15,22 @@ from app.gateway.local_service.api_server import (
     get_llm_api_service,
     is_service_running,
     open_docs,
+    serve_main,
     start_llm_api_service,
     stop_llm_api_service,
+)
+from app.gateway.local_service.attach_client import (
+    KernelAttachClient,
+    KernelAttachError,
+    wait_for_server,
 )
 from app.gateway.local_service.isolated_context import (
     IsolatedChatContext,
     IsolatedContextRegistry,
+)
+from app.gateway.local_service.kernel_serve import (
+    KernelServeHandler,
+    TaskRecord,
 )
 from app.gateway.local_service.session_handler import (
     APIHistoryManager,
@@ -37,6 +47,14 @@ __all__ = [
     "stop_llm_api_service",
     "is_service_running",
     "open_docs",
+    "serve_main",
+    # attach 客户端
+    "KernelAttachClient",
+    "KernelAttachError",
+    "wait_for_server",
+    # RLM 内核常驻
+    "KernelServeHandler",
+    "TaskRecord",
     # Session Handler
     "APISessionHandler",
     "APIHistoryManager",

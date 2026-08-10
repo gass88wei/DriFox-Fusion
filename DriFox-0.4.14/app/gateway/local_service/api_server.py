@@ -13,8 +13,22 @@ Gateway 本地微服务 - HTTP API 服务
 - DELETE /sessions/{id}             - 删除会话
 - POST /sessions/{id}/chat/stream   - 在指定会话中对话（流式 SSE）
 - POST /chat/stop                   - 停止当前流式请求
+- POST /kernel/tasks                - 提交 RLM 内核任务（--serve 常驻）
+- GET  /kernel/tasks                - 任务/会话列表
+- GET  /kernel/tasks/{id}           - 任务详情
+- GET  /kernel/tasks/{id}/events    - 任务事件流（SSE，历史回放 + 实时）
+- GET  /kernel/snapshot             - 下载内核快照（.dill）
+- POST /kernel/snapshot             - 手动触发快照
+- POST /kernel/restore              - 从快照恢复内核状态
+- POST /kernel/restart              - 重启内核（清空命名空间）
+- GET  /kernel/status               - 内核服务状态
+
+--serve 模式：独立常驻进程（无 UI），内核挂在服务进程内。
 """
 
+import asyncio
+import os
+import queue
 import threading
 from typing import Any, Dict, Optional
 
@@ -27,7 +41,7 @@ except NameError:
     pass
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from loguru import logger
 
 # 全局服务实例
@@ -82,9 +96,10 @@ class LLMAPIService:
         """获取会话处理器"""
         return cls._session_handler
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8765, kernel_handler=None):
         self.host = host
         self.port = port
+        self.kernel_handler = kernel_handler
         self.app = FastAPI(
             title="DriFox Gateway Local Service",
             description="复用 UI 对话逻辑的远程 API 接口",
@@ -279,6 +294,147 @@ class LLMAPIService:
 
             return {"success": True, "status": get_lock_screen_remote_manager().status()}
 
+        # ==================== RLM 内核常驻（L4 --serve） ====================
+        # 不依赖 UI session_handler：kernel_handler 注入后即可用（--serve 无 UI 模式）。
+        # UI 窗口作为 SSE 客户端 attach 到这些端点回放事件，关闭窗口仅断开连接。
+
+        def _kernel_ok(self_kernel_handler):
+            if self_kernel_handler is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="RLM 内核服务未初始化（需 --serve 模式或注入 kernel_handler）"
+                )
+
+        @self.app.get("/kernel/status")
+        async def kernel_status():
+            """内核服务状态（内核/任务统计/快照）"""
+            _kernel_ok(self.kernel_handler)
+            return {"success": True, "status": self.kernel_handler.status()}
+
+        @self.app.post("/kernel/tasks", response_model=Dict[str, Any])
+        async def kernel_submit_task(request: Dict[str, Any]):
+            """提交内核任务：{code, timeout_ms?, session?}"""
+            _kernel_ok(self.kernel_handler)
+            code = request.get("code", "")
+            if not code or not isinstance(code, str):
+                raise HTTPException(status_code=400, detail="code 是必填项（非空字符串）")
+            try:
+                task = self.kernel_handler.submit_task(
+                    code=code,
+                    timeout_ms=request.get("timeout_ms"),
+                    session=str(request.get("session", "default")),
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            return {"success": True, "task": task}
+
+        @self.app.get("/kernel/tasks", response_model=Dict[str, Any])
+        async def kernel_list_tasks(session: Optional[str] = None):
+            """任务/会话列表（session 过滤可选）"""
+            _kernel_ok(self.kernel_handler)
+            return {
+                "success": True,
+                "tasks": self.kernel_handler.task_list(session=session),
+            }
+
+        @self.app.get("/kernel/tasks/{task_id}", response_model=Dict[str, Any])
+        async def kernel_task_detail(task_id: str):
+            """任务详情（含 code/result/events 全量）"""
+            _kernel_ok(self.kernel_handler)
+            task = self.kernel_handler.task_detail(task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+            return {"success": True, "task": task}
+
+        @self.app.get("/kernel/tasks/{task_id}/events")
+        async def kernel_task_events(task_id: str, after: int = 0):
+            """任务事件流 SSE：先回放 after 之后的历史事件，再实时推送
+
+            UI attach 用法：连接本端点回放（快照+事件）；断开（detach）不
+            影响任务执行；重连后以 after=已见事件数继续。
+            """
+            _kernel_ok(self.kernel_handler)
+            if after is None:
+                after = 0
+            try:
+                after = int(after)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="after 必须是整数")
+            if after < 0:
+                raise HTTPException(status_code=400, detail="after 不能为负")
+            task = self.kernel_handler.task_detail(task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+
+            q = self.kernel_handler.subscribe(task_id)
+
+            async def event_generator():
+                try:
+                    # 1) 历史回放（after 之后的事件）
+                    for ev in self.kernel_handler.task_events(task_id, after=after):
+                        yield f"data: {json.dumps(ev).decode('utf-8')}\n\n"
+                    # 2) 实时订阅
+                    # 🛡️ 阻塞取队列必须走线程池（run_in_executor）：同步
+                    # q.get 会冻结 asyncio 事件循环，已 yield 的 chunk 无法
+                    # flush 到对端（curl 收到 headers 但 0 bytes body）。
+                    loop = asyncio.get_running_loop()
+                    while True:
+                        try:
+                            ev = await loop.run_in_executor(None, q.get, True, 15.0)
+                        except queue.Empty:
+                            yield ": keepalive\n\n"  # SSE 心跳保活
+                            continue
+                        yield f"data: {json.dumps(ev).decode('utf-8')}\n\n"
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    self.kernel_handler.unsubscribe(task_id, q)
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        @self.app.get("/kernel/snapshot")
+        async def kernel_snapshot_download():
+            """下载内核快照（.dill 二进制 + 同目录 manifest）"""
+            _kernel_ok(self.kernel_handler)
+            snap = self.kernel_handler.status().get("snapshot")
+            if not snap or not os.path.exists(snap):
+                raise HTTPException(status_code=404, detail="尚无快照（先提交任务或 POST /kernel/snapshot）")
+            return FileResponse(
+                snap,
+                media_type="application/octet-stream",
+                filename="kernel-state.dill",
+            )
+
+        @self.app.post("/kernel/snapshot", response_model=Dict[str, Any])
+        async def kernel_snapshot_trigger():
+            """手动触发内核快照"""
+            _kernel_ok(self.kernel_handler)
+            path = self.kernel_handler.snapshot()
+            if not path:
+                raise HTTPException(status_code=500, detail="快照失败（内核未运行或序列化失败）")
+            return {"success": True, "snapshot_path": path}
+
+        @self.app.post("/kernel/restore", response_model=Dict[str, Any])
+        async def kernel_restore():
+            """从磁盘快照恢复内核状态（应用重启恢复）"""
+            _kernel_ok(self.kernel_handler)
+            restored = self.kernel_handler.restore_kernel_state()
+            return {"success": restored, "message": "快照已恢复" if restored else "无可恢复快照"}
+
+        @self.app.post("/kernel/restart", response_model=Dict[str, Any])
+        async def kernel_restart():
+            """重启内核（命名空间清空；任务记录保留）"""
+            _kernel_ok(self.kernel_handler)
+            return self.kernel_handler.restart_kernel()
+
     def start(self, background: bool = True):
         """启动服务"""
         if self._running:
@@ -390,3 +546,39 @@ def open_docs():
         _wait_local_port_ready(_llm_api_service.port)
         import webbrowser
         webbrowser.open(f"http://localhost:{_llm_api_service.port}/docs")
+
+
+def serve_main(host: str = "0.0.0.0", port: int = 8765, state_dir: Optional[str] = None) -> None:
+    """--serve 独立常驻入口（无 UI，L4）
+
+    服务进程内挂 RLM 内核（KernelServeHandler）+ uvicorn 前台阻塞运行：
+    1. 启动常驻服务（含快照恢复 + 未完成任务继续）
+    2. 启动 HTTP/SSE 接口（提交任务/事件流/会话列表/快照下载）
+    3. 阻塞直到进程退出（Ctrl+C / SIGTERM 干净关停，任务记录落盘）
+
+    UI 窗口在本进程外 attach SSE 即可回放事件；关闭窗口只断连接。
+    """
+    import atexit
+
+    from app.gateway.local_service.kernel_serve import KernelServeHandler
+
+    handler = KernelServeHandler.get_instance(state_dir=state_dir)
+    handler.start()
+    service = get_llm_api_service()
+    service.host = host
+    service.port = port
+    service.kernel_handler = handler
+
+    def _cleanup():
+        try:
+            handler.stop(keep_tasks=True)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup)
+    try:
+        service._run_server()  # 前台阻塞（非 background 线程）
+    except KeyboardInterrupt:
+        logger.info("[GatewayLocal] --serve 收到中断，正在关停...")
+    finally:
+        _cleanup()

@@ -8,6 +8,28 @@ import os
 import sys
 import warnings
 
+# ========== --serve 模式（L4 后台保活，无 UI） ==========
+# 必须在任何 Qt/qfluentwidgets 导入之前处理：--serve 是独立常驻进程，
+# 不创建窗口，只跑 FastAPI+uvicorn + RLM 内核。
+if "--serve" in sys.argv:
+    from app.gateway.local_service.api_server import serve_main
+
+    _host = "0.0.0.0"
+    _port = 8765
+    _state_dir = None
+    if "--port" in sys.argv:
+        try:
+            _port = int(sys.argv[sys.argv.index("--port") + 1])
+        except (IndexError, ValueError):
+            pass
+    if "--state-dir" in sys.argv:
+        try:
+            _state_dir = sys.argv[sys.argv.index("--state-dir") + 1]
+        except IndexError:
+            pass
+    serve_main(host=_host, port=_port, state_dir=_state_dir)
+    sys.exit(0)
+
 from qfluentwidgets import setFontFamilies
 
 warnings.filterwarnings("ignore")

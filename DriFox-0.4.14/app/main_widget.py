@@ -4174,7 +4174,7 @@ class OpenAIChatToolWindow(ToolWindow):
         if FunctionCommandHandlers.has(name):
             return True
         # 硬编码内置命令
-        if name in ("new", "new-window", "branch", "remember", "refine"):
+        if name in ("new", "new-window", "branch", "remember", "refine", "route", "router"):
             return True
         return False
 
@@ -4248,6 +4248,12 @@ class OpenAIChatToolWindow(ToolWindow):
                 return True
             elif command_name == "refine":
                 self._handle_refine_command(args)
+                return True
+            elif command_name == "route":
+                self._handle_route_command(args)
+                return True
+            elif command_name == "router":
+                self._handle_router_command(args)
                 return True
             else:
                 # 无 Python 处理器注册 → 降级到 prompt 注入（缺处理器语义）
@@ -6458,6 +6464,140 @@ class OpenAIChatToolWindow(ToolWindow):
                 parent=TabManagerWindow.get_instance() or self.window(),
                 position=InfoBarPosition.BOTTOM,
             )
+
+    def _handle_route_command(self, args: str):
+        """/route 命令：对任务描述做路由评分，输出 PRIMARY 路径 + 依据
+
+        用法:
+          /route <任务描述>   路由评分（PRIMARY 路径 + 依据 + 置信度）
+          /route --list      列出全部路由规则
+          /route             无参数 → 显示帮助
+
+        Args:
+            args: 命令后的参数字符串
+        """
+        from app.core.router import get_router
+        from app.core.router.router import format_route_result
+
+        args = (args or "").strip()
+
+        # --list：列出全部规则
+        if re.search(r"--list\b", args):
+            try:
+                rules = get_router().list_rules()
+                if not rules:
+                    InfoBar.info("路由规则", "暂无规则", parent=self.window(),
+                                 position=InfoBarPosition.BOTTOM)
+                    return
+                lines = [f"{r['id']} | {r['label']} | [{r['target_type']}]{r['target_name']}"
+                         for r in rules]
+                InfoBar.info("路由规则", "\n".join(lines[:8]),
+                             parent=TabManagerWindow.get_instance() or self.window(),
+                             duration=5000, position=InfoBarPosition.BOTTOM)
+            except Exception as e:
+                InfoBar.error("路由规则查询失败", str(e),
+                              parent=TabManagerWindow.get_instance() or self.window(),
+                              position=InfoBarPosition.BOTTOM)
+            return
+
+        # 无参数 → 帮助
+        if not args:
+            InfoBar.info("路由命令", "/route <任务描述> 路由评分\n/route --list 规则列表",
+                         parent=TabManagerWindow.get_instance() or self.window(),
+                         duration=5000, position=InfoBarPosition.BOTTOM)
+            return
+
+        # 正常路由评分
+        try:
+            result = get_router().route(args)
+            text = "\n".join(format_route_result(result))
+            InfoBar.info(
+                f"路由结果 {result.primary}",
+                text,
+                parent=TabManagerWindow.get_instance() or self.window(),
+                duration=8000,
+                position=InfoBarPosition.BOTTOM,
+            )
+        except Exception as e:
+            InfoBar.error("路由失败", str(e),
+                          parent=TabManagerWindow.get_instance() or self.window(),
+                          position=InfoBarPosition.BOTTOM)
+
+    def _handle_router_command(self, args: str):
+        """/router 命令：路由规则管理
+
+        用法:
+          /router --list        列出全部路由规则
+          /router --stats       路由统计（规则数/目标分布）
+          /router --auto on     开启 PreUserMessage 自动路由（默认关）
+          /router --auto off    关闭自动路由
+          /router --auto        查询当前开关状态
+          /router --check <任务>  等同 /route <任务>
+
+        Args:
+            args: 命令后的参数字符串
+        """
+        from app.core.router import get_router
+
+        args = (args or "").strip()
+
+        # --auto 开关管理
+        if re.search(r"--auto\b", args):
+            from plugins.system.hooks.auto_route import (
+                is_auto_route_enabled,
+                set_auto_route_enabled,
+            )
+
+            if re.search(r"--auto\s+on\b", args):
+                set_auto_route_enabled(True)
+                InfoBar.success("自动路由已开启",
+                                "PreUserMessage 将注入路由建议（可 /router --auto off 关闭）",
+                                parent=TabManagerWindow.get_instance() or self.window(),
+                                position=InfoBarPosition.BOTTOM)
+                return
+            if re.search(r"--auto\s+off\b", args):
+                set_auto_route_enabled(False)
+                InfoBar.info("自动路由已关闭",
+                             "PreUserMessage 不再注入路由建议",
+                             parent=TabManagerWindow.get_instance() or self.window(),
+                             position=InfoBarPosition.BOTTOM)
+                return
+            # 仅 --auto → 查询状态
+            state = "开" if is_auto_route_enabled() else "关（默认）"
+            InfoBar.info("自动路由状态", state,
+                         parent=TabManagerWindow.get_instance() or self.window(),
+                         position=InfoBarPosition.BOTTOM)
+            return
+
+        # --stats：统计
+        if re.search(r"--stats\b", args):
+            try:
+                rules = get_router().list_rules()
+                routes = get_router().config.get("routes", {})
+                targets = {}
+                for r in rules:
+                    targets[r["target_type"]] = targets.get(r["target_type"], 0) + 1
+                dist = " / ".join(f"{k}:{v}" for k, v in sorted(targets.items())) or "无"
+                text = f"规则总数: {len(rules)}\n目标分布: {dist}\nfallback: {routes.get('meta', {}).get('fallbackId', '')}"
+                InfoBar.info("路由统计", text,
+                             parent=TabManagerWindow.get_instance() or self.window(),
+                             duration=5000, position=InfoBarPosition.BOTTOM)
+            except Exception as e:
+                InfoBar.error("路由统计失败", str(e),
+                              parent=TabManagerWindow.get_instance() or self.window(),
+                              position=InfoBarPosition.BOTTOM)
+            return
+
+        # --check <任务>：等同 /route
+        check_match = re.search(r"--check\s+(.+)", args)
+        if check_match:
+            self._handle_route_command(check_match.group(1).strip())
+            return
+
+        # 无参数 → 帮助
+        InfoBar.info("路由管理", "/router --list 规则列表\n/router --stats 统计\n/router --auto on|off 自动路由\n/router --check <任务> 路由评分",
+                     parent=TabManagerWindow.get_instance() or self.window(),
+                     duration=6000, position=InfoBarPosition.BOTTOM)
 
     # ========== 命令卡片处理 ==========
 

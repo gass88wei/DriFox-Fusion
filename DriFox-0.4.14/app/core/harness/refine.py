@@ -186,6 +186,15 @@ class RefineEngine:
             if patch["op"] == OP_CREATE and not patch.get("scope"):
                 patch["scope"] = scope
 
+        # 2.6 全量预检（原子性）：update/delete 目标必须存在，否则整体拒绝
+        #     —— 避免部分补丁已落库后才发现后续补丁非法
+        for patch in patches:
+            if patch["op"] in (OP_UPDATE, OP_DELETE):
+                if not self._entries.get(patch["id"]):
+                    raise RefineValidationError(
+                        f"{patch['op']}: 条目 {patch['id']!r} 不存在"
+                    )
+
         # 3. 逐条应用并收集 before/after 快照
         changes: List[Dict] = []
         created, updated, deleted = [], [], []

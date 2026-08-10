@@ -448,11 +448,12 @@ class MemoryRepository:
                 # 默认 version+1（保留原值加 1）
                 sets.append("version = COALESCE(version, 1) + 1")
             params.append(memory_id)
-            success, _ = self._execute(
+            success, rows = self._execute(
                 f'UPDATE {self.TABLE_NAME} SET {", ".join(sets)} WHERE id = ?',
                 tuple(params)
             )
-            return success
+            # 记录数 >0 才算真正更新（0 行 = id 不存在）
+            return bool(success and rows and int(rows) > 0)
         except Exception as e:
             logger.error(f"[MemoryRepository] update_entry 异常: {e}")
             return False
@@ -471,11 +472,12 @@ class MemoryRepository:
             return False
 
         try:
-            success, _ = self._execute(
+            success, rows = self._execute(
                 f'DELETE FROM {self.TABLE_NAME} WHERE id = ?',
                 (memory_id,)
             )
-            return success
+            # 记录数 >0 才算真正删除（0 行 = id 不存在）
+            return bool(success and rows and int(rows) > 0)
         except Exception as e:
             logger.error(f"[MemoryRepository] delete 异常: {e}")
             return False

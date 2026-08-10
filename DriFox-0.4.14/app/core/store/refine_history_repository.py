@@ -14,6 +14,7 @@ refine 快照仓储模块 - 记录 /refine 提炼前后的条目快照，支持�
 
 import hashlib
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -115,7 +116,8 @@ class RefineHistoryRepository:
             return None
 
         if not refine_id:
-            raw = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{hashlib.md5(str(changes).encode()).hexdigest()[:8]}"
+            # 时间戳 + changes 指纹 + 随机段：同秒同内容多次 refine 也不会碰撞
+            raw = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{hashlib.md5(str(changes).encode()).hexdigest()[:8]}_{uuid.uuid4().hex[:6]}"
             refine_id = f"refine_{raw}"
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

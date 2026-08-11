@@ -38,5 +38,7 @@ Output format (MANDATORY):
 ## 自检结果
 <what you verified by reading the code back; known limitations>
 ```
+**When a test expectation contradicts the task requirements** (e.g. the test asserts a true palindrome is not a palindrome): do NOT modify the tests (the test-generator owns them). If you are confident the test expectation is wrong, state it explicitly in your output under "## 自检结果" (test expectation issue), and fix the implementation only where the task actually requires it.
+
 
 Do NOT output a "TEST_RESULT:" line — that is the test-generator's job. Keep your output focused on the implementation itself.

@@ -93,10 +93,20 @@ SAMPLE_QUESTIONS = [
 
 
 def _extract_python(text: str) -> str:
-    """提取 ```python 代码块；无代码块时取最后一段含 def 的文本"""
+    """提取 python 代码：优先完整代码块；支持截断代码块（无闭合标记）；回退 def/import 行。"""
+    if not text:
+        return ""
     blocks = re.findall(r"```(?:python|py)?\s*\n(.*?)```", text, re.S)
     if blocks:
         return max(blocks, key=len).strip()
+    # 截断的代码块：取 ```python 之后的全部文本，去掉最后一行（可能不完整）
+    m = re.search(r"```(?:python|py)?\s*\n(.*)$", text, re.S)
+    if m:
+        raw = m.group(1).strip()
+        lines = raw.split("\n")
+        if len(lines) > 1 and lines[-1].strip() and not lines[-1].strip().endswith((":", ")", "]", "}", '"', "'")):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
     candidates = re.findall(r"(?ms)^(?:def |import |from |class ).*?(?=\n\S|$)", text)
     if candidates:
         return "\n\n".join(c.strip() for c in candidates if c.strip()).strip()
@@ -115,6 +125,7 @@ def build_llm_node(api_key: str, api_base: str, model: str, sample_dir: Path, ti
     client = OpenAI(api_key=api_key, base_url=api_base)
 
     def llm(system_prompt: str, user_prompt: str) -> str:
+        time.sleep(3)  # 全局节流：free 端点对连续请求敏感，避免触发空转限流
         resp = client.chat.completions.create(
             model=model,
             messages=[
@@ -122,10 +133,18 @@ def build_llm_node(api_key: str, api_base: str, model: str, sample_dir: Path, ti
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=2048,
+            max_tokens=8192,
             timeout=120,
         )
-        return (resp.choices[0].message.content or "").strip()
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            # 空转关键信息：finish_reason 区分「服务端限流」与「max_tokens 截断」
+            print(
+                f"    [llm-空转] finish={resp.choices[0].finish_reason} "
+                f"usage={resp.usage} reasoning={bool(getattr(resp.choices[0].message, 'reasoning_content', None))}",
+                flush=True,
+            )
+        return content
 
     def run_test(test_code: str, solution_code: str) -> tuple[bool, str]:
         """本地真实运行测试代码 → (passed, 输出)"""
@@ -153,35 +172,41 @@ def build_llm_node(api_key: str, api_base: str, model: str, sample_dir: Path, ti
         from app.core.mission import NodeOutcome
 
         system_prompt = read_agent_prompt(agent)
+        # thinking 模型偶发空转（content 为空/无代码）：无效输出自动重试，最多 3 次尝试
+        for attempt in range(1, 4):
+            if agent == "solver":
+                out = llm(system_prompt, context + "\n\n请把实现代码写入 solution.py。输出格式：**开头第一行就是完整 ```python 代码块**（只含代码，不要任何解释文字），代码块之后可以跟简短说明。")
+                code = _extract_python(out)
+                if code:
+                    (sample_dir / "solution.py").write_text(code, encoding="utf-8")
+                    return NodeOutcome(agent, description, result=out, tokens=0)
+            elif agent == "test-generator":
+                solution_code = (sample_dir / "solution.py").read_text(encoding="utf-8", errors="replace")
+                # 精简 context：test-generator 只需 任务+实现，去掉假设段（降低请求复杂度）
+                ctx_short = re.sub(r"## 假设\n.*?(?=## 实现|$)", "", context, flags=re.S)
+                out = llm(
+                    system_prompt,
+                    ctx_short
+                    + f"\n\n当前 solution.py 内容:\n```python\n{solution_code}\n```\n"
+                    + "请生成对抗测试代码。输出格式：**开头第一行就是完整 ```python 代码块**（只含 pytest 测试代码，import 用 from solution import ...），不要输出 TEST_RESULT 标记行。",
+                )
+                test_code = _extract_python(out)
+                if test_code and "def test" in test_code:
+                    passed, output = run_test(test_code, solution_code)
+                    # 以真实运行结果为准构造标记（free 模型输出受限，LLM 声明不可靠）
+                    marker = "TEST_RESULT: PASS" if passed else "TEST_RESULT: FAIL"
+                    detail = "" if passed else f"\n## 失败详情\n{output}"
+                    return NodeOutcome(agent, description, result=f"{marker}\n{detail}", tokens=0)
+            else:
+                out = llm(system_prompt, context or description)
+                return NodeOutcome(agent, description, result=out, tokens=0)
+            if attempt < 3:
+                print(f"    [重试 {attempt}/3] {agent} 输出无效（len={len(out)}），15s 冷却后重试", flush=True)
+                time.sleep(15)
+        # 3 次尝试均无效
         if agent == "solver":
-            out = llm(system_prompt, context + "\n\n请把实现代码写入 solution.py（输出完整 ```python 代码块）")
-            code = _extract_python(out)
-            if not code:
-                return NodeOutcome(agent, description, error="solver 未能生成代码")
-            (sample_dir / "solution.py").write_text(code, encoding="utf-8")
-            return NodeOutcome(agent, description, result=out, tokens=0)
-        if agent == "test-generator":
-            solution_code = (sample_dir / "solution.py").read_text(encoding="utf-8", errors="replace")
-            out = llm(
-                system_prompt,
-                context
-                + f"\n\n当前 solution.py 内容:\n```python\n{solution_code}\n```\n"
-                + "请生成对抗测试代码（输出完整 ```python 代码块，内含对 solution 的 import 与 pytest 用例），"
-                + "然后输出 TEST_RESULT 标记行作为第一行。",
-            )
-            # 从输出里提取测试代码并真实运行
-            m = re.search(r"TEST_RESULT: (PASS|FAIL)", out)
-            test_code = _extract_python(out)
-            if not test_code or "def test" not in test_code:
-                return NodeOutcome(agent, description, error="test-generator 未能生成测试代码")
-            passed, output = run_test(test_code, solution_code)
-            # 以真实运行结果为准构造标记
-            marker = "TEST_RESULT: PASS" if passed else "TEST_RESULT: FAIL"
-            detail = "" if passed else f"\n## 失败详情\n{output}"
-            return NodeOutcome(agent, description, result=f"{marker}\n{detail}", tokens=0)
-        # hypothesis / summarizer
-        out = llm(system_prompt, context or description)
-        return NodeOutcome(agent, description, result=out, tokens=0)
+            return NodeOutcome(agent, description, error="solver 未能生成代码（3 次尝试输出均无效）")
+        return NodeOutcome(agent, description, error="test-generator 未能生成测试代码（3 次尝试输出均无效）")
 
     return node
 

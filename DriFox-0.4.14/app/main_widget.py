@@ -217,6 +217,96 @@ from app.widgets.ui_helpers import (
 # ───────────────────────────────────────────────────────────────────────────
 # 项目 icon tooltip 异步分支检测
 # ───────────────────────────────────────────────────────────────────────────
+class _MissionWorker(QThread):
+    """/mission 后台执行线程：跑 MissionRunner 特工团队全流程（L5）
+
+    节点经 SubAgentManager.execute_task 真实执行（每个角色一个子智能体任务），
+    事件等待用 threading.Event（回调经 Qt 信号在主线程执行后 set）。
+    """
+
+    finished_ok = pyqtSignal(dict)  # MissionResult.to_dict()
+    failed = pyqtSignal(str)
+
+    def __init__(self, backend, task_description: str, max_rounds: int = 3, parent=None):
+        super().__init__(parent)
+        self._backend = backend
+        self._task_description = task_description
+        self._max_rounds = max_rounds
+
+    def run(self):
+        try:
+            from app.core.engines.auto_loop.config import AutoLoopConfig
+            from app.core.mission import MissionRunner, NodeOutcome
+
+            manager = getattr(self._backend, "sub_agent_manager", None)
+            if manager is None:
+                self.failed.emit("子智能体管理器不可用")
+                return
+
+            llm_config = None
+            try:
+                llm_config = self._backend._get_subagent_llm_config()
+            except Exception:
+                pass
+
+            def _execute_node(agent, description, parent_context):
+                event = threading.Event()
+                box = {"done": False}
+                executor_ref = {}
+
+                def _on_fin(tid, result):
+                    box["result"] = result
+                    box["done"] = True
+                    event.set()
+
+                def _on_err(tid, error):
+                    box["error"] = error
+                    box["done"] = True
+                    event.set()
+
+                ok = manager.execute_task(
+                    task_id=str(uuid.uuid4()),
+                    agent_name=agent,
+                    task_description=description,
+                    parent_context=parent_context,
+                    on_finished=_on_fin,
+                    on_error=_on_err,
+                    executor_ref=executor_ref,
+                    share_context=False,
+                    llm_config=llm_config,
+                )
+                if not ok:
+                    return NodeOutcome(agent, description, error="任务提交失败（agent 不存在或 LLM 未配置）")
+                event.wait(timeout=7200)  # 2h 保护性超时
+                if not box.get("done"):
+                    return NodeOutcome(agent, description, error="等待节点完成超时")
+                tokens = 0
+                ex = executor_ref.get("executor")
+                if ex is not None:
+                    try:
+                        tokens = int(getattr(ex, "total_tokens", 0) or 0)
+                    except Exception:
+                        tokens = 0
+                return NodeOutcome(
+                    agent,
+                    description,
+                    result=box.get("result", ""),
+                    error=box.get("error", ""),
+                    tokens=tokens,
+                )
+
+            runner = MissionRunner(
+                node_executor=_execute_node,
+                config=AutoLoopConfig(),
+                max_rounds=self._max_rounds,
+            )
+            result = runner.run(self._task_description)
+            self.finished_ok.emit(result.to_dict())
+        except Exception as e:
+            logger.exception(f"[Mission] 执行异常: {e}")
+            self.failed.emit(str(e))
+
+
 class _BranchDetectSignals(QObject):
     """后台 git 分支检测的信号桥接（后台线程 → 主线程）。"""
 
@@ -4174,7 +4264,7 @@ class OpenAIChatToolWindow(ToolWindow):
         if FunctionCommandHandlers.has(name):
             return True
         # 硬编码内置命令
-        if name in ("new", "new-window", "branch", "remember", "refine", "route", "router", "kernel-attach"):
+        if name in ("new", "new-window", "branch", "remember", "refine", "route", "router", "kernel-attach", "mission"):
             return True
         return False
 
@@ -4257,6 +4347,9 @@ class OpenAIChatToolWindow(ToolWindow):
                 return True
             elif command_name == "kernel-attach":
                 self._handle_kernel_attach_command(args)
+                return True
+            elif command_name == "mission":
+                self._handle_mission_command(args)
                 return True
             else:
                 # 无 Python 处理器注册 → 降级到 prompt 注入（缺处理器语义）
@@ -6729,6 +6822,97 @@ class OpenAIChatToolWindow(ToolWindow):
             except Exception:
                 pass
         self._kernel_attach_client = None
+
+    # ========== /mission 特工团队（L5） ==========
+
+    def _handle_mission_command(self, args: str):
+        """/mission 命令：特工团队编排（L5，GrandCode 四角色）
+
+        用法:
+          /mission <任务描述>                默认对抗回环 3 轮，预算复用 AutoLoopConfig
+          /mission <任务描述> --rounds N     指定对抗回环最大轮数
+          /mission <任务描述> --no-loop      单轮（等价 --rounds 1）
+
+        流水线: hypothesis → [solver → test-generator]×N → summarizer；
+        test-generator 用例失败带错误回环 solver（最多 N 轮）。
+        """
+        args = (args or "").strip()
+        if not args:
+            InfoBar.error(
+                "特工团队",
+                "用法: /mission <任务描述> [--rounds N] [--no-loop]",
+                parent=TabManagerWindow.get_instance() or self.window(),
+                position=InfoBarPosition.BOTTOM,
+            )
+            return
+
+        max_rounds = 3
+        rounds_match = re.search(r"--rounds\s+(\d+)", args)
+        if rounds_match:
+            max_rounds = max(1, int(rounds_match.group(1)))
+        task_text = re.sub(r"--rounds\s+\d+", "", args).strip()
+        if "--no-loop" in task_text:
+            task_text = task_text.replace("--no-loop", "").strip()
+            max_rounds = 1
+        if not task_text:
+            InfoBar.error(
+                "特工团队",
+                "任务描述不能为空: /mission <任务描述>",
+                parent=TabManagerWindow.get_instance() or self.window(),
+                position=InfoBarPosition.BOTTOM,
+            )
+            return
+
+        worker = _MissionWorker(self.backend, task_text, max_rounds=max_rounds)
+        self._mission_worker = worker
+        worker.finished_ok.connect(self._on_mission_finished)
+        worker.failed.connect(self._on_mission_failed)
+        worker.start()
+        InfoBar.info(
+            "特工团队",
+            f"Mission 已启动（对抗回环上限 {max_rounds} 轮）: {task_text[:60]}",
+            parent=TabManagerWindow.get_instance() or self.window(),
+            duration=8000,
+            position=InfoBarPosition.BOTTOM,
+        )
+
+    def _on_mission_finished(self, result: dict):
+        """Mission 完成 → 展示结果摘要"""
+        status = result.get("status", "completed")
+        passed = result.get("test_passed", False)
+        rounds = result.get("loop_rounds_used", 0)
+        tokens = result.get("total_tokens", 0)
+        reason = result.get("reason", "")
+        summary_head = ""
+        if result.get("summary"):
+            summary_head = str(result.get("summary_agent", ""))
+        lines = [
+            f"状态: {'通过 ✔' if passed and status == 'completed' else status}（回环 {rounds} 轮，tokens {tokens}）",
+        ]
+        if reason:
+            lines.append(f"结束原因: {reason}")
+        if summary_head:
+            lines.append(f"提炼角色: {summary_head}")
+        text = "\n".join(lines)
+        if passed:
+            InfoBar.info(
+                "特工团队", f"Mission 完成：对抗测试通过\n{text}",
+                parent=TabManagerWindow.get_instance() or self.window(),
+                duration=10000, position=InfoBarPosition.BOTTOM,
+            )
+        else:
+            InfoBar.warning(
+                "特工团队", f"Mission 结束：对抗测试未通过\n{text}",
+                parent=TabManagerWindow.get_instance() or self.window(),
+                duration=10000, position=InfoBarPosition.BOTTOM,
+            )
+
+    def _on_mission_failed(self, error: str):
+        InfoBar.error(
+            "特工团队", f"Mission 执行失败: {error}",
+            parent=TabManagerWindow.get_instance() or self.window(),
+            position=InfoBarPosition.BOTTOM,
+        )
 
     # ========== 命令卡片处理 ==========
 

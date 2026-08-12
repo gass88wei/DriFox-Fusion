@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [v0.4.15] - 2026-08-12
+### ✨ 新功能 (New Features) — L1-L5 融合工程首发
+- **Harness 记忆 + /refine** (L1, `app/core/harness/`): 4 类条目（prompt/memory/skill/subagent）CRUD + 提炼闭环（轨迹→补丁→校验→落库→快照）+ `/refine [--global|--rollback <id>|--history]` 快照回滚 + format_memory_context hook 注入 `### Harness 记忆` 段
+- **路由层 /route /router** (L2, `app/core/router/`): routing.json 单一事实源（R1-R30 + R0 兜底）+ must/mustAll/exclude 正则评分 + priority 决胜 + 可用性检测 + PreUserMessage 自动路由 hook（默认关）
+- **RLM 执行内核 make_python** (L3, `app/core/kernel_manager.py`): 持久 ipykernel + jupyter_client 串行执行（cap/abort/drain）+ dill 快照恢复 + host bridge + `make_python`/`kernel_status`/`kernel_restart`/`kernel_snapshot`/`kernel_restore` 工具，跨轮状态保持
+- **后台保活 /kernel-attach** (L4, `app/gateway/local_service/kernel_serve.py`): 轻量 uvicorn 常驻服务（任务队列/SSE 事件流/快照持久化/重启恢复）+ `--serve` 独立入口 + attach_client + `/kernel-attach` 命令，关窗口仅 detach 不杀服务
+- **特工团队 /mission** (L5, `app/core/mission/runner.py`): GrandCode 四角色（hypothesis/solver/test-generator/summarizer）DAG 编排 + 对抗回环（N=3）+ 预算复用 AutoLoopConfig + 真实对抗实证（Unicode casefold 缺陷被回环捕获）
+### ⚖️ 其他 (Chores)
+- CI: release.yml 迁移至仓库根并适配 monorepo 目录结构（working-directory: DriFox-0.4.14）
+- 回归基线（附录 A 口径）: 1768 passed / 160 failed（既有遗留不修）/ 7 skipped / 71 errors（8 个遗留收集错误文件）
+
 ## [v0.4.14] - 2026-08-07
 
 ### 🐛 问题修复 (Bug Fixes)

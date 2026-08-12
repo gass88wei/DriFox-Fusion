@@ -12,6 +12,11 @@ on:
 permissions:
   contents: write                   # 创建 Release 必需
 
+# 代码位于 DriFox-0.4.14/ 子目录（仓库根 = D:/008 monorepo）
+defaults:
+  run:
+    working-directory: DriFox-0.4.14
+
 jobs:
   # ════════════════════════════════════════════════
   # Job 0: Lint & Import Check（构建前置检查）
@@ -134,7 +139,7 @@ jobs:
         with:
           name: Drifox-Windows-${{ steps.version.outputs.tag }}
           path: |
-            dist/output/*
+            DriFox-0.4.14/dist/output/*
           if-no-files-found: error
           retention-days: 30
 
@@ -273,8 +278,8 @@ jobs:
         with:
           name: Drifox-macOS-${{ steps.version.outputs.tag }}
           path: |
-            dist/Drifox-macOS-*.dmg
-            dist/SHA256SUMS
+            DriFox-0.4.14/dist/Drifox-macOS-*.dmg
+            DriFox-0.4.14/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
 
@@ -362,8 +367,8 @@ jobs:
         with:
           name: Drifox-Linux-${{ steps.version.outputs.tag }}
           path: |
-            dist/Drifox-Linux-*.tar.gz
-            dist/SHA256SUMS
+            DriFox-0.4.14/dist/Drifox-Linux-*.tar.gz
+            DriFox-0.4.14/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
 
@@ -377,6 +382,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # 覆盖全局 defaults：artifacts 下载/收集与 Release 上传都在仓库根执行
+    defaults:
+      run:
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -404,7 +413,7 @@ jobs:
         run: |
           python -c "
           import re, sys
-          with open('CHANGELOG.md') as f:
+          with open('DriFox-0.4.14/CHANGELOG.md') as f:
               content = f.read()
           tag = '${{ github.ref_name }}'
           # Extract the version entry matching current tag (## [vX.Y.Z] ...)

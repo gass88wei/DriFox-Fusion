@@ -13,11 +13,11 @@
 ![Stars](https://img.shields.io/github/stars/martin98-afk/DriFox)
 ![Downloads](https://img.shields.io/github/downloads/martin98-afk/DriFox/total)
 ![Last Commit](https://img.shields.io/github/last-commit/martin98-afk/DriFox)
-![Version](https://img.shields.io/badge/version-0.4.14-brightgreen)
+![Version](https://img.shields.io/badge/version-0.4.15-brightgreen)
 
 </div>
 
-<h1 align="center">DriFox 飘狐 v0.4.14 — 轻量化 AI 桌面对话助手</h1>
+<h1 align="center">DriFox 飘狐 v0.4.15 — 轻量化 AI 桌面对话助手</h1>
 
 <p align="center">
   <b>不做大而全的 IDE。</b> 只是一个对话框——随时调出，随意提问，随性分支。
@@ -59,6 +59,11 @@
 | 🖼️ **图片富媒体** | Markdown/HTML 图片原生渲染 |
 | 🐾 **桌宠系统** | PixelPet 桌面宠物，状态动画 |
 | 🚀 **自动更新** | 自动检查新版本 |
+| 🧠 **Harness 记忆 + /refine** (v0.4.15) | 4 类条目持久化，提炼闭环+快照回滚，跨会话经验沉淀 |
+| 🧭 **路由层 /route /router** (v0.4.15) | routing.json 单一事实源，30 条规则评分路由，自动路由可选 |
+| ⚙️ **RLM 执行内核 make_python** (v0.4.15) | 持久 ipykernel 跨轮状态，dill 快照恢复，可中止执行 |
+| 🔄 **后台保活 /kernel-attach** (v0.4.15) | 轻量 uvicorn 常驻服务，SSE 事件流，关窗不杀任务 |
+| 🤝 **特工团队 /mission** (v0.4.15) | 四角色（hypothesis/solver/test-generator/summarizer）对抗回环 |
 | 🌐 **models.dev 动态同步** | 启动时从 models.dev 拉取最新模型元数据，24h 缓存，增量合并 |
 | 🧩 **模型参数服务商级隔离** | 同名模型在不同服务商下的参数配置互不干扰 |
 
@@ -96,7 +101,7 @@ python main.py
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    DriFox v0.4.14 架构                       │
+│                    DriFox v0.4.15 架构                       │
 ├──────────────────────────────────────────────────────────────┤
 │  UI 层      悬浮窗口 / 消息卡片 / 差异视图 / 输入区         │
 │             浮动卡片 / 桌宠 / 系统托盘 / 设置面板            │
@@ -170,6 +175,8 @@ plugins/system/          # 系统内置插件（打包在 exe 中）
 **Skills (25+)**：brainstorming, tdd, diagnose, caveman, ui-plugin-creator, agent-canvas-designer, github-ops, session-summary, subagent-driven-development, grill-me, writing-plans, git-commit, find-skills, triage, zoom-out 等
 
 **新命令 (since v0.2.6)**：`/team`、`/theme`、`/title-gen`、`/toggle-window`、`/clear`、`/subagents`、`/webresearch`、`/remember`、`/todos`、`/lsp-install`、`/verify`、`/release`、`/receive-review`、`/worktree`
+
+**L1-L5 融合命令 (v0.4.15)**：`/refine [--global|--rollback <id>|--history]`（Harness 记忆提炼）、`/route <任务>`、`/router --list|--stats|--auto|--check`（路由层）、`/kernel-attach`（后台服务 attach）、`/mission <描述> [--rounds N] [--no-loop]`（特工团队）
 
 ---
 

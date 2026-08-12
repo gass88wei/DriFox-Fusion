@@ -1,0 +1,54 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# 代码位于 DriFox-0.4.14/ 子目录（仓库根 = monorepo）
+defaults:
+  run:
+    working-directory: DriFox-0.4.14
+
+jobs:
+  # ════════════════════════════════════════════════
+  # L1-L5 融合工程测试门禁
+  #   口径（附录 A.5）：只跑 L1-L5 新增测试（纯逻辑/服务，无 Qt 顶层依赖，
+  #   跨平台稳定）；160 条既有失败为 Qt GUI 测试，ubuntu 无头环境会制造
+  #   环境性噪音，留在本地回归基线不修；8 个遗留收集错误文件不纳入。
+  # ════════════════════════════════════════════════
+  test:
+    name: L1-L5 融合工程测试
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: "uv-ci"
+
+      - name: Sync dev dependencies
+        run: uv sync --group dev
+
+      - name: Lint check (ruff) - 新增模块
+        run: |
+          uv run ruff check app/core/harness/ app/core/router/ app/core/kernel_manager.py app/core/mission/ app/gateway/local_service/kernel_serve.py app/tools/kernel_tools.py
+
+      - name: L1-L5 融合工程测试
+        run: |
+          uv run pytest tests/test_harness_entries.py \
+            tests/test_refine_chain.py \
+            tests/test_refine_injection.py \
+            tests/test_router.py \
+            tests/test_mission.py \
+            tests/test_kernel_manager.py \
+            tests/test_kernel_serve.py \
+            -v --tb=short

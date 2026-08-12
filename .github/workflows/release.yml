@@ -107,9 +107,14 @@ jobs:
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
           Write-Host "💡 编译安装包，版本号: $tag"
-          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" dist\installer.iss /DMyAppVersion=$tag
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "❌ Inno Setup 编译失败 (exit code: $LASTEXITCODE)"
+          # installer.iss 内相对路径（drifox.ico / Drifox\* / output / ChineseSimplified.isl）
+          # 以 iss 所在目录 dist/ 为基准 → 先 cd dist 再编译
+          Push-Location dist
+          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" installer.iss /DMyAppVersion=$tag
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          if ($exitCode -ne 0) {
+            Write-Error "❌ Inno Setup 编译失败 (exit code: $exitCode)"
             exit 1
           }
 

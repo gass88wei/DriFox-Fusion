@@ -13,10 +13,15 @@ Qt 环境说明（Fixture 策略）：
 - QApplication 通过 session-scoped autouse fixture 创建，确保时机可控
 """
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# CI 无头环境开关（GitHub Actions ubuntu）：PyQt5 在 Linux+Py3.14 下 import/建 QApplication 会段错误，
+# 纯逻辑/服务测试（L1-L5）无需 Qt；设 DRIFOX_CI_NO_QT=1 时完全跳过 Qt 初始化与 _qt_app fixture
+_CI_NO_QT = os.environ.get("DRIFOX_CI_NO_QT") == "1"
 
 # 仓库根目录 = tests/ 的父目录
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,27 +31,28 @@ if str(_REPO_ROOT) not in sys.path:
 # 收集 Qt 初始化错误
 _QT_INIT_ERRORS: list[str] = []
 
-# 必须在 QApplication 之前设置 OpenGL 共享（方案 B）
-# 注意：此属性必须在 QApplication 实例化前设置，否则不生效
-try:
-    from PyQt5.QtCore import Qt, QT_VERSION_STR  # noqa: F401
+if not _CI_NO_QT:
+    # 必须在 QApplication 之前设置 OpenGL 共享（方案 B）
+    # 注意：此属性必须在 QApplication 实例化前设置，否则不生效
+    try:
+        from PyQt5.QtCore import Qt, QT_VERSION_STR  # noqa: F401
 
-    from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtWidgets import QApplication
 
-    # 立即设置，QApplication 创建前生效
-    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
-except Exception as _e:
-    _QT_INIT_ERRORS.append(f"Qt/Attribute: {_e!r}")
+        # 立即设置，QApplication 创建前生效
+        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+    except Exception as _e:
+        _QT_INIT_ERRORS.append(f"Qt/Attribute: {_e!r}")
 
-# 预导入 WebEngineWidgets，必须在 QApplication 之前完成
-try:
-    from PyQt5.QtWebEngineWidgets import (  # noqa: F401
-        QWebEnginePage,
-        QWebEngineSettings,
-        QWebEngineView,
-    )
-except Exception as _e:
-    _QT_INIT_ERRORS.append(f"WebEngineWidgets: {_e!r}")
+    # 预导入 WebEngineWidgets，必须在 QApplication 之前完成
+    try:
+        from PyQt5.QtWebEngineWidgets import (  # noqa: F401
+            QWebEnginePage,
+            QWebEngineSettings,
+            QWebEngineView,
+        )
+    except Exception as _e:
+        _QT_INIT_ERRORS.append(f"WebEngineWidgets: {_e!r}")
 
 if _QT_INIT_ERRORS:
     import warnings
@@ -62,6 +68,9 @@ if _QT_INIT_ERRORS:
 @pytest.fixture(scope="session", autouse=True)
 def _qt_app():
     """创建 session 级 QApplication（fixture 化确保时机可控）。"""
+    if _CI_NO_QT:
+        yield None
+        return
     app = QApplication([])
     yield app
     app.quit()

@@ -52,3 +52,6 @@ jobs:
             tests/test_kernel_manager.py \
             tests/test_kernel_serve.py \
             -v --tb=short
+        env:
+          # ubuntu 无头环境：跳过 conftest 的 PyQt5 初始化与 _qt_app fixture（Linux+Py3.14 段错误）
+          DRIFOX_CI_NO_QT: "1"

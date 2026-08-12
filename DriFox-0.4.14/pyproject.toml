@@ -144,7 +144,7 @@ markers = [
 
 # 构建系统配置
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=83.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # 打包配置
